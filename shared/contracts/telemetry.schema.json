@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RoomTelemetry",
+  "type": "object",
+  "required": ["room_id", "door_open", "blockage", "leak_detected", "timestamp"],
+  "properties": {
+    "room_id": {"type": "string"},
+    "door_open": {"type": "boolean"},
+    "blockage": {"type": "boolean"},
+    "leak_detected": {"type": "boolean"},
+    "ultrasonic_distance_cm": {"type": "number"},
+    "motion_detected": {"type": "boolean"},
+    "timestamp": {"type": "integer"}
+  }
+}

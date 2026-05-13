@@ -1,0 +1,415 @@
+'use client';
+
+import useSWR from 'swr';
+import { useEffect, useState } from 'react';
+
+import {
+  AlertTriangle,
+  Building2,
+  Cpu,
+  BellRing,
+  Loader2,
+  CheckCircle2,
+  WifiOff,
+} from 'lucide-react';
+
+/*
+|--------------------------------------------------------------------------
+| API BASE URL
+|--------------------------------------------------------------------------
+|
+| IMPORTANT:
+| Backend runs on port 8000
+| DO NOT use:
+|   http://localhost/api
+|
+| CORRECT:
+|   http://localhost:8000
+|
+*/
+
+const api =
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  'http://localhost:8000';
+
+/*
+|--------------------------------------------------------------------------
+| PAGE COMPONENT
+|--------------------------------------------------------------------------
+*/
+
+export default function Page() {
+  /*
+  |--------------------------------------------------------------------------
+  | STATE
+  |--------------------------------------------------------------------------
+  */
+
+  const [token, setToken] = useState(null);
+
+  const [loading, setLoading] = useState(true);
+
+  const [loginError, setLoginError] = useState('');
+
+  /*
+  |--------------------------------------------------------------------------
+  | LOGIN
+  |--------------------------------------------------------------------------
+  */
+
+  const login = async () => {
+    try {
+      setLoading(true);
+
+      setLoginError('');
+
+      const res = await fetch(`${api}/auth/login`, {
+        method: 'POST',
+
+        headers: {
+          'Content-Type': 'application/json',
+        },
+
+        body: JSON.stringify({
+          email: 'admin@alghurair.local',
+          password: 'Admin@12345',
+        }),
+      });
+
+      /*
+      |--------------------------------------------------------------------------
+      | HANDLE BAD RESPONSES
+      |--------------------------------------------------------------------------
+      */
+
+      if (!res.ok) {
+        const errText = await res.text();
+
+        console.error('LOGIN FAILED:', errText);
+
+        setLoginError(`Login failed (${res.status})`);
+
+        setLoading(false);
+
+        return;
+      }
+
+      const data = await res.json();
+
+      console.log('LOGIN RESPONSE:', data);
+
+      /*
+      |--------------------------------------------------------------------------
+      | SUCCESS
+      |--------------------------------------------------------------------------
+      */
+
+      if (data.access_token) {
+        setToken(data.access_token);
+      } else {
+        setLoginError('No access token returned');
+      }
+    } catch (err) {
+      console.error('LOGIN ERROR:', err);
+
+      setLoginError('Backend connection failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | INITIAL LOGIN
+  |--------------------------------------------------------------------------
+  */
+
+  useEffect(() => {
+    login();
+  }, []);
+
+  /*
+  |--------------------------------------------------------------------------
+  | FETCHER
+  |--------------------------------------------------------------------------
+  */
+
+  const fetcher = async (url) => {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!res.ok) {
+        throw new Error(`Request failed ${res.status}`);
+      }
+
+      return await res.json();
+    } catch (err) {
+      console.error('FETCH ERROR:', err);
+
+      return null;
+    }
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | ANALYTICS
+  |--------------------------------------------------------------------------
+  */
+
+  const {
+    data,
+    error: analyticsError,
+  } = useSWR(
+    token ? `${api}/analytics/summary` : null,
+    fetcher,
+    {
+      refreshInterval: 5000,
+      revalidateOnFocus: true,
+    }
+  );
+
+  /*
+  |--------------------------------------------------------------------------
+  | ALERTS
+  |--------------------------------------------------------------------------
+  */
+
+  const {
+    data: alerts,
+    error: alertsError,
+  } = useSWR(
+    token ? `${api}/alerts` : null,
+    fetcher,
+    {
+      refreshInterval: 5000,
+      revalidateOnFocus: true,
+    }
+  );
+
+  /*
+  |--------------------------------------------------------------------------
+  | STATS CARDS
+  |--------------------------------------------------------------------------
+  */
+
+  const stats = [
+    [
+      'Buildings',
+      data?.buildings ?? 0,
+      Building2,
+    ],
+
+    [
+      'Devices',
+      data?.devices ?? 0,
+      Cpu,
+    ],
+
+    [
+      'Open Alerts',
+      data?.alerts_open ?? 0,
+      AlertTriangle,
+    ],
+
+    [
+      'AI Events 24h',
+      data?.ai_events_24h ?? 0,
+      BellRing,
+    ],
+  ];
+
+  /*
+  |--------------------------------------------------------------------------
+  | RENDER
+  |--------------------------------------------------------------------------
+  */
+
+  return (
+    <main className="min-h-screen bg-black text-white p-6 space-y-6">
+      {/* ========================================================= */}
+      {/* HEADER */}
+      {/* ========================================================= */}
+
+      <header className="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-lg">
+        <div className="text-sm text-slate-400">
+          Al Ghurair
+        </div>
+
+        <h1 className="text-3xl font-semibold mt-1">
+          Smart Garbage Chute Room Monitoring
+        </h1>
+
+        <p className="text-slate-400 mt-2 max-w-3xl">
+          Multi-building realtime monitoring,
+          AI detections, alerting,
+          predictive maintenance,
+          and OTA firmware management.
+        </p>
+
+        {/* ===================================================== */}
+        {/* STATUS */}
+        {/* ===================================================== */}
+
+        <div className="mt-4 flex items-center gap-2 text-sm">
+          {loading && (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin text-yellow-400" />
+
+              <span className="text-yellow-400">
+                Signing in...
+              </span>
+            </>
+          )}
+
+          {!loading && token && (
+            <>
+              <CheckCircle2 className="h-4 w-4 text-green-400" />
+
+              <span className="text-green-400">
+                Authenticated
+              </span>
+            </>
+          )}
+
+          {!loading && loginError && (
+            <>
+              <WifiOff className="h-4 w-4 text-red-400" />
+
+              <span className="text-red-400">
+                {loginError}
+              </span>
+            </>
+          )}
+        </div>
+      </header>
+
+      {/* ========================================================= */}
+      {/* ANALYTICS CARDS */}
+      {/* ========================================================= */}
+
+      <section className="grid gap-4 md:grid-cols-4">
+        {stats.map(([label, value, Icon]) => (
+          <div
+            key={label}
+            className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm text-slate-400">
+                  {label}
+                </div>
+
+                <div className="mt-2 text-3xl font-semibold">
+                  {value}
+                </div>
+              </div>
+
+              <Icon className="h-8 w-8 text-slate-300" />
+            </div>
+          </div>
+        ))}
+      </section>
+
+      {/* ========================================================= */}
+      {/* ERRORS */}
+      {/* ========================================================= */}
+
+      {(analyticsError || alertsError) && (
+        <div className="rounded-2xl border border-red-900 bg-red-950/30 p-4 text-red-300">
+          Failed to load realtime monitoring data.
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MAIN GRID */}
+      {/* ========================================================= */}
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        {/* ===================================================== */}
+        {/* LIVE ALERTS */}
+        {/* ===================================================== */}
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+          <div className="mb-4 text-lg font-semibold">
+            Live Alerts
+          </div>
+
+          <div className="max-h-[460px] space-y-3 overflow-auto">
+            {(alerts || []).length === 0 && (
+              <div className="rounded-xl border border-slate-800 p-4 text-sm text-slate-400">
+                No active alerts
+              </div>
+            )}
+
+            {(alerts || []).slice(0, 12).map((a) => (
+              <div
+                key={a.id}
+                className="rounded-xl border border-slate-800 bg-slate-950/60 p-3"
+              >
+                <div className="flex items-center justify-between">
+                  <strong>
+                    {a.category}
+                  </strong>
+
+                  <span className="text-xs text-slate-400">
+                    {a.severity}
+                  </span>
+                </div>
+
+                <div className="mt-1 text-sm text-slate-300">
+                  {a.message}
+                </div>
+
+                <div className="mt-2 text-xs text-slate-500">
+                  Room {a.room_id}
+                  {' · '}
+                  {a.acknowledged
+                    ? 'Acknowledged'
+                    : 'Open'}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* ===================================================== */}
+        {/* OPERATIONS */}
+        {/* ===================================================== */}
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+          <div className="mb-4 text-lg font-semibold">
+            Operations
+          </div>
+
+          <div className="grid gap-3 text-sm text-slate-300">
+            <div className="rounded-xl border border-slate-800 p-3">
+              Realtime WebSocket updates from backend
+            </div>
+
+            <div className="rounded-xl border border-slate-800 p-3">
+              OTA job control and firmware progress tracking
+            </div>
+
+            <div className="rounded-xl border border-slate-800 p-3">
+              AI CCTV detections for overflow,
+              smoke, misuse, and blockage
+            </div>
+
+            <div className="rounded-xl border border-slate-800 p-3">
+              BMS, WhatsApp, SMS,
+              email, and escalation hooks
+            </div>
+
+            <div className="rounded-xl border border-slate-800 p-3">
+              MQTT telemetry ingestion from ESP32-S3 edge devices
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}

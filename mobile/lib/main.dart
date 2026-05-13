@@ -1,26 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'screens/login_screen.dart';
+
 import 'screens/dashboard_screen.dart';
-import 'services/auth_service.dart';
+import 'screens/login_screen.dart';
 import 'services/api_service.dart';
+import 'services/auth_service.dart';
 import 'services/notification_service.dart';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Initialize notification service
-  await NotificationService().initialize();
-  
+
+  await NotificationService.instance.initialize();
+
+  final apiService = ApiService();
+  final authService = AuthService(apiService: apiService);
+  await authService.initialize();
+
   runApp(
     MultiProvider(
       providers: [
-        Provider<ApiService>(create: (_) => ApiService()),
-        ChangeNotifierProvider<AuthService>(
-          create: (context) => AuthService(
-            apiService: context.read<ApiService>(),
-          ),
-        ),
+        Provider<ApiService>.value(value: apiService),
+        ChangeNotifierProvider<AuthService>.value(value: authService),
       ],
       child: const SmartGarbageApp(),
     ),
@@ -28,56 +28,51 @@ void main() async {
 }
 
 class SmartGarbageApp extends StatelessWidget {
-  const SmartGarbageApp({Key? key}) : super(key: key);
+  const SmartGarbageApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Smart Garbage Chute',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF0066CC),
+          seedColor: const Color(0xFF0F5C7A),
           brightness: Brightness.light,
         ),
+        scaffoldBackgroundColor: const Color(0xFFF3F5F7),
         useMaterial3: true,
         appBarTheme: const AppBarTheme(
           elevation: 0,
-          centerTitle: true,
+          centerTitle: false,
         ),
       ),
       home: Consumer<AuthService>(
         builder: (context, authService, _) {
+          if (!authService.isReady) {
+            return const _StartupScreen();
+          }
+
           if (authService.isAuthenticated) {
             return const DashboardScreen();
-          } else {
-            return const LoginScreen();
           }
+
+          return const LoginScreen();
         },
       ),
     );
   }
 }
-  final List<String> events = [];
+
+class _StartupScreen extends StatelessWidget {
+  const _StartupScreen();
 
   @override
-  void initState() {
-    super.initState();
-    channel = WebSocketChannel.connect(Uri.parse('ws://localhost/ws'));
-    channel.stream.listen((event) { setState(() => events.insert(0, event.toString())); });
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
   }
-
-  @override
-  void dispose() { channel.sink.close(); super.dispose(); }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Garbage Chute Mobile')),
-    body: ListView.builder(
-      itemCount: events.length,
-      itemBuilder: (_, i) {
-        final e = events[i];
-        return ListTile(title: Text('Realtime event'), subtitle: Text(e));
-      },
-    ),
-  );
 }

@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../services/api_service.dart';
+import 'package:timeago/timeago.dart' as timeago;
+
 import '../models/device.dart';
+import '../services/api_service.dart';
 
 class DevicesScreen extends StatefulWidget {
-  const DevicesScreen({Key? key}) : super(key: key);
+  const DevicesScreen({super.key});
 
   @override
   State<DevicesScreen> createState() => _DevicesScreenState();
@@ -16,31 +18,26 @@ class _DevicesScreenState extends State<DevicesScreen> {
   @override
   void initState() {
     super.initState();
-    _loadDevices();
+    _devicesFuture = _fetchDevices();
   }
 
-  Future<void> _loadDevices() {
+  Future<List<Device>> _fetchDevices() async {
     final apiService = context.read<ApiService>();
-    _devicesFuture = _fetchDevices(apiService);
+    final payload = await apiService.get('/devices');
+    return apiService.expectList(payload).map(Device.fromJson).toList();
   }
 
-  Future<List<Device>> _fetchDevices(ApiService apiService) async {
-    try {
-      final data = await apiService.get('/devices');
-      final devices =
-          (data['items'] as List?)?.map((d) => Device.fromJson(d)).toList() ??
-          [];
-      return devices;
-    } catch (e) {
-      debugPrint('Error loading devices: $e');
-      rethrow;
-    }
+  Future<void> _reload() async {
+    setState(() {
+      _devicesFuture = _fetchDevices();
+    });
+    await _devicesFuture;
   }
 
   @override
   Widget build(BuildContext context) {
     return RefreshIndicator(
-      onRefresh: (_) async => setState(() => _loadDevices()),
+      onRefresh: _reload,
       child: FutureBuilder<List<Device>>(
         future: _devicesFuture,
         builder: (context, snapshot) {
@@ -49,38 +46,37 @@ class _DevicesScreenState extends State<DevicesScreen> {
           }
 
           if (snapshot.hasError) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.error, size: 64, color: Colors.red),
-                  const SizedBox(height: 16),
-                  Text('Error: ${snapshot.error}'),
-                ],
-              ),
+            return ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    children: [
+                      const Icon(Icons.error_outline,
+                          size: 64, color: Colors.red),
+                      const SizedBox(height: 16),
+                      Text('Failed to load devices: ${snapshot.error}'),
+                    ],
+                  ),
+                ),
+              ],
             );
           }
 
-          final devices = snapshot.data ?? [];
-
+          final devices = snapshot.data ?? const [];
           if (devices.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.devices_other,
-                    size: 64,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('No devices'),
-                ],
-              ),
+            return ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: const [
+                SizedBox(height: 120),
+                Center(child: Text('No devices discovered')),
+              ],
             );
           }
 
           return ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
             itemCount: devices.length,
             padding: const EdgeInsets.all(12),
             itemBuilder: (context, index) {
@@ -88,31 +84,36 @@ class _DevicesScreenState extends State<DevicesScreen> {
               return Card(
                 margin: const EdgeInsets.only(bottom: 12),
                 child: ExpansionTile(
-                  leading: Icon(
-                    Icons.router,
-                    color: device.online ? Colors.green : Colors.grey,
+                  leading: CircleAvatar(
+                    backgroundColor: device.online
+                        ? Colors.green.shade50
+                        : Colors.grey.shade200,
+                    child: Icon(
+                      Icons.memory_outlined,
+                      color: device.online ? Colors.green : Colors.grey,
+                    ),
                   ),
                   title: Text(device.deviceId),
                   subtitle: Text(
-                    'Room ${device.roomId} • ${device.online ? 'Online' : 'Offline'}',
+                    '${device.roomLabel} • ${device.online ? 'Online' : 'Offline'}',
                   ),
+                  childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildDetailRow('Device ID', device.deviceId),
-                          _buildDetailRow('Type', device.deviceType),
-                          _buildDetailRow('Firmware', device.firmwareVersion),
-                          _buildDetailRow(
-                            'Last Seen',
-                            device.lastSeenAt != null
-                                ? _formatDateTime(device.lastSeenAt!)
-                                : 'Never',
-                          ),
-                        ],
-                      ),
+                    _detailRow('Location', device.locationLabel),
+                    _detailRow('Type', device.deviceType),
+                    _detailRow('Firmware', device.firmwareVersion),
+                    _detailRow('Open Alerts', '${device.openAlertCount}'),
+                    _detailRow(
+                      'Last Seen',
+                      device.lastSeenAt == null
+                          ? 'Never'
+                          : timeago.format(device.lastSeenAt!),
+                    ),
+                    _detailRow(
+                      'Last Event',
+                      device.lastEventType == null
+                          ? '--'
+                          : '${device.lastEventType} • ${device.lastEventAt == null ? '--' : timeago.format(device.lastEventAt!)}',
                     ),
                   ],
                 ),
@@ -124,31 +125,22 @@ class _DevicesScreenState extends State<DevicesScreen> {
     );
   }
 
-  Widget _buildDetailRow(String label, String value) {
+  Widget _detailRow(String label, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
-          Text(value),
+          SizedBox(
+            width: 96,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          Expanded(child: Text(value)),
         ],
       ),
     );
-  }
-
-  String _formatDateTime(DateTime dateTime) {
-    final now = DateTime.now();
-    final diff = now.difference(dateTime);
-
-    if (diff.inSeconds < 60) {
-      return 'just now';
-    } else if (diff.inMinutes < 60) {
-      return '${diff.inMinutes}m ago';
-    } else if (diff.inHours < 24) {
-      return '${diff.inHours}h ago';
-    } else {
-      return '${diff.inDays}d ago';
-    }
   }
 }

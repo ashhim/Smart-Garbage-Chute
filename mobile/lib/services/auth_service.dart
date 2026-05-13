@@ -1,27 +1,33 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
 import 'api_service.dart';
 
 class AuthService extends ChangeNotifier {
+  AuthService({required this.apiService});
+
+  static const _tokenKey = 'auth_token';
+  static const _emailKey = 'auth_email';
+
   final ApiService apiService;
-  final _storage = const FlutterSecureStorage();
+  final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
   String? _token;
   String? _email;
   bool _isAuthenticated = false;
-
-  AuthService({required this.apiService}) {
-    _loadToken();
-  }
+  bool _isReady = false;
 
   String? get token => _token;
   String? get email => _email;
   bool get isAuthenticated => _isAuthenticated;
+  bool get isReady => _isReady;
 
-  Future<void> _loadToken() async {
-    _token = await _storage.read(key: 'auth_token');
-    _email = await _storage.read(key: 'auth_email');
-    _isAuthenticated = _token != null;
+  Future<void> initialize() async {
+    _token = await _storage.read(key: _tokenKey);
+    _email = await _storage.read(key: _emailKey);
+    _isAuthenticated = _token != null && _token!.isNotEmpty;
+    apiService.setToken(_token);
+    _isReady = true;
     notifyListeners();
   }
 
@@ -31,21 +37,24 @@ class AuthService extends ChangeNotifier {
         'email': email,
         'password': password,
       });
+      final payload = apiService.expectMap(result);
 
-      if (result['access_token'] != null) {
-        _token = result['access_token'];
-        _email = email;
-        _isAuthenticated = true;
-
-        await _storage.write(key: 'auth_token', value: _token!);
-        await _storage.write(key: 'auth_email', value: email);
-
-        notifyListeners();
-        return true;
+      if (payload['access_token'] == null) {
+        return false;
       }
-      return false;
-    } catch (e) {
-      debugPrint('Login error: $e');
+
+      _token = payload['access_token'].toString();
+      _email = email;
+      _isAuthenticated = true;
+      apiService.setToken(_token);
+
+      await _storage.write(key: _tokenKey, value: _token);
+      await _storage.write(key: _emailKey, value: email);
+
+      notifyListeners();
+      return true;
+    } catch (error) {
+      debugPrint('Login error: $error');
       return false;
     }
   }
@@ -54,9 +63,10 @@ class AuthService extends ChangeNotifier {
     _token = null;
     _email = null;
     _isAuthenticated = false;
+    apiService.setToken(null);
 
-    await _storage.delete(key: 'auth_token');
-    await _storage.delete(key: 'auth_email');
+    await _storage.delete(key: _tokenKey);
+    await _storage.delete(key: _emailKey);
 
     notifyListeners();
   }

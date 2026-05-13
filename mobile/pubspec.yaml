@@ -10,50 +10,18 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # HTTP & Networking
-  http: ^1.2.2
-  dio: ^5.4.0
-  web_socket_channel: ^3.0.1
-
-  # State Management
-  provider: ^6.2.1
-  riverpod: ^2.5.1
-
-  # UI Components
   cupertino_icons: ^1.0.8
-  flutter_svg: ^2.0.10
-  intl: ^0.19.0
-
-  # Notifications
-  firebase_core: ^2.28.0
-  firebase_messaging: ^14.9.5
   flutter_local_notifications: ^17.1.2
-
-  # Authentication
   flutter_secure_storage: ^9.2.2
-  shared_preferences: ^2.2.3
-
-  # Date & Time
+  http: ^1.2.2
+  provider: ^6.1.2
   timeago: ^3.6.1
-
-  # Logging
-  logger: ^2.2.0
+  web_socket_channel: ^3.0.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
-  flutter_lints: ^4.0.0
+  flutter_lints: ^5.0.0
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/images/
-    - assets/icons/
-  fonts:
-    - family: Roboto
-      fonts:
-        - asset: assets/fonts/Roboto-Regular.ttf
-        - asset: assets/fonts/Roboto-Bold.ttf
-          weight: 700
-

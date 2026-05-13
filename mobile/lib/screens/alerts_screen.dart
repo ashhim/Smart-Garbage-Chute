@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../services/api_service.dart';
+import 'package:timeago/timeago.dart' as timeago;
+
 import '../models/alert.dart';
+import '../services/api_service.dart';
 
 class AlertsScreen extends StatefulWidget {
-  const AlertsScreen({Key? key}) : super(key: key);
+  const AlertsScreen({super.key});
 
   @override
   State<AlertsScreen> createState() => _AlertsScreenState();
@@ -16,50 +18,53 @@ class _AlertsScreenState extends State<AlertsScreen> {
   @override
   void initState() {
     super.initState();
-    _loadAlerts();
+    _alertsFuture = _fetchAlerts();
   }
 
-  Future<void> _loadAlerts() {
+  Future<List<Alert>> _fetchAlerts() async {
     final apiService = context.read<ApiService>();
-    _alertsFuture = _fetchAlerts(apiService);
+    final payload = await apiService.get('/alerts');
+    return apiService
+        .expectList(payload)
+        .take(100)
+        .map(Alert.fromJson)
+        .toList();
   }
 
-  Future<List<Alert>> _fetchAlerts(ApiService apiService) async {
-    try {
-      final data = await apiService.get('/alerts?limit=100');
-      final alerts =
-          (data['items'] as List?)?.map((a) => Alert.fromJson(a)).toList() ??
-          [];
-      return alerts;
-    } catch (e) {
-      debugPrint('Error loading alerts: $e');
-      rethrow;
-    }
+  Future<void> _reload() async {
+    setState(() {
+      _alertsFuture = _fetchAlerts();
+    });
+    await _alertsFuture;
   }
 
   Future<void> _acknowledgeAlert(int alertId) async {
     try {
       final apiService = context.read<ApiService>();
-      await apiService.post('/alerts/$alertId/acknowledge', {});
-      _loadAlerts();
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Alert acknowledged')));
+      await apiService.post('/alerts/$alertId/acknowledge', {
+        'actor': 'mobile-app',
+      });
+      await _reload();
+      if (!mounted) {
+        return;
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Alert acknowledged')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
       }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Acknowledge failed: $error')),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return RefreshIndicator(
-      onRefresh: (_) async => setState(() => _loadAlerts()),
+      onRefresh: _reload,
       child: FutureBuilder<List<Alert>>(
         future: _alertsFuture,
         builder: (context, snapshot) {
@@ -68,68 +73,66 @@ class _AlertsScreenState extends State<AlertsScreen> {
           }
 
           if (snapshot.hasError) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.error, size: 64, color: Colors.red),
-                  const SizedBox(height: 16),
-                  Text('Error: ${snapshot.error}'),
-                ],
-              ),
+            return ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    children: [
+                      const Icon(Icons.error_outline,
+                          size: 64, color: Colors.red),
+                      const SizedBox(height: 16),
+                      Text('Failed to load alerts: ${snapshot.error}'),
+                    ],
+                  ),
+                ),
+              ],
             );
           }
 
-          final alerts = snapshot.data ?? [];
-
+          final alerts = snapshot.data ?? const [];
           if (alerts.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.check_circle,
-                    size: 64,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('No alerts'),
-                ],
-              ),
+            return ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: const [
+                SizedBox(height: 120),
+                Center(child: Text('No alerts')),
+              ],
             );
           }
 
           return ListView.builder(
-            itemCount: alerts.length,
+            physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(12),
+            itemCount: alerts.length,
             itemBuilder: (context, index) {
               final alert = alerts[index];
               return Card(
                 margin: const EdgeInsets.only(bottom: 12),
                 child: ListTile(
                   leading: Icon(
-                    alert.getSeverityIcon(),
-                    color: alert.getSeverityColor(),
-                    size: 32,
+                    alert.severityIcon,
+                    color: alert.severityColor,
+                    size: 30,
                   ),
                   title: Text(alert.message),
                   subtitle: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Room ${alert.roomId} • ${alert.category}'),
+                      Text('${alert.roomLabel} • ${alert.category}'),
                       Text(
-                        _formatTime(alert.createdAt),
+                        '${alert.source} • ${timeago.format(alert.createdAt)}',
                         style: const TextStyle(fontSize: 12),
                       ),
                     ],
                   ),
-                  trailing:
-                      alert.acknowledged
-                          ? const Icon(Icons.check, color: Colors.green)
-                          : IconButton(
-                            icon: const Icon(Icons.done),
-                            onPressed: () => _acknowledgeAlert(alert.id),
-                          ),
+                  trailing: alert.acknowledged
+                      ? const Icon(Icons.check_circle, color: Colors.green)
+                      : IconButton(
+                          icon: const Icon(Icons.done_outline),
+                          onPressed: () => _acknowledgeAlert(alert.id),
+                        ),
                 ),
               );
             },
@@ -137,20 +140,5 @@ class _AlertsScreenState extends State<AlertsScreen> {
         },
       ),
     );
-  }
-
-  String _formatTime(DateTime dateTime) {
-    final now = DateTime.now();
-    final diff = now.difference(dateTime);
-
-    if (diff.inSeconds < 60) {
-      return 'just now';
-    } else if (diff.inMinutes < 60) {
-      return '${diff.inMinutes}m ago';
-    } else if (diff.inHours < 24) {
-      return '${diff.inHours}h ago';
-    } else {
-      return '${diff.inDays}d ago';
-    }
   }
 }

@@ -1,85 +1,77 @@
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 class NotificationService {
-  static final NotificationService _instance = NotificationService._internal();
-
-  factory NotificationService() {
-    return _instance;
-  }
-
   NotificationService._internal();
 
-  final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
-  late FlutterLocalNotificationsPlugin _localNotifications;
+  static final NotificationService instance = NotificationService._internal();
+
+  factory NotificationService() => instance;
+
+  final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
+
+  bool _initialized = false;
 
   Future<void> initialize() async {
-    // Initialize Firebase (if credentials provided)
-    try {
-      await Firebase.initializeApp();
-    } catch (e) {
-      print('Firebase not configured: $e');
+    if (_initialized) {
+      return;
     }
 
-    // Initialize local notifications
-    _localNotifications = FlutterLocalNotificationsPlugin();
+    const settings = InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      iOS: DarwinInitializationSettings(),
+    );
 
-    const AndroidInitializationSettings androidSettings =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
+    await _plugin.initialize(settings);
 
-    const DarwinInitializationSettings iOSSettings =
-        DarwinInitializationSettings();
+    await _plugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
 
-    const InitializationSettings initializationSettings =
-        InitializationSettings(android: androidSettings, iOS: iOSSettings);
+    await _plugin
+        .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin>()
+        ?.requestPermissions(alert: true, badge: true, sound: true);
 
-    await _localNotifications.initialize(initializationSettings);
+    await _plugin
+        .resolvePlatformSpecificImplementation<
+            MacOSFlutterLocalNotificationsPlugin>()
+        ?.requestPermissions(alert: true, badge: true, sound: true);
 
-    // Request permissions
-    await _firebaseMessaging.requestPermission();
-
-    // Listen to foreground notifications
-    FirebaseMessaging.onMessage.listen(_handleForegroundNotification);
-
-    // Listen to notification tap
-    FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationTap);
+    _initialized = true;
   }
 
-  Future<void> _handleForegroundNotification(RemoteMessage message) async {
-    final notification = message.notification;
-    if (notification != null) {
-      await _localNotifications.show(
-        notification.hashCode,
-        notification.title,
-        notification.body,
-        const NotificationDetails(
-          android: AndroidNotificationDetails(
-            'high_importance_channel',
-            'High Importance Notifications',
-            importance: Importance.max,
-            priority: Priority.high,
-          ),
-          iOS: DarwinNotificationDetails(),
-        ),
-      );
-    }
-  }
+  Future<void> showRealtimeAlert({
+    required String title,
+    required String body,
+  }) async {
+    await initialize();
 
-  void _handleNotificationTap(RemoteMessage message) {
-    print('Notification tapped: ${message.messageId}');
-    // Navigate to alert details screen
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'smart-garbage-alerts',
+        'Smart Garbage Alerts',
+        channelDescription: 'Realtime chute room alerts and notifications',
+        importance: Importance.max,
+        priority: Priority.high,
+      ),
+      iOS: DarwinNotificationDetails(),
+    );
+
+    await _plugin.show(
+      DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title,
+      body,
+      details,
+    );
   }
 
   Future<String?> getToken() async {
-    return await _firebaseMessaging.getToken();
+    return null;
   }
 
-  Future<void> subscribeToTopic(String topic) async {
-    await _firebaseMessaging.subscribeToTopic(topic);
-  }
+  Future<void> subscribeToTopic(String topic) async {}
 
-  Future<void> unsubscribeFromTopic(String topic) async {
-    await _firebaseMessaging.unsubscribeFromTopic(topic);
-  }
+  Future<void> unsubscribeFromTopic(String topic) async {}
 }

@@ -1,0 +1,95 @@
+# Prometheus Alert Rules for Smart Garbage Chute System
+groups:
+  - name: backend
+    interval: 30s
+    rules:
+      # Alert on backend service down
+      - alert: BackendServiceDown
+        expr: up{job="backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: backend
+        annotations:
+          summary: "Backend service is down"
+          description: "Backend API service has been unavailable for more than 1 minute"
+
+      # Alert on high error rate
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{job="backend", status=~"5.."}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "High error rate detected"
+          description: "Backend error rate is above 5% for the last 5 minutes"
+
+      # Alert on database connection issues
+      - alert: DatabaseConnectionErrors
+        expr: increase(db_connection_errors_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+          service: database
+        annotations:
+          summary: "Database connection errors"
+          description: "More than 10 database connection errors in the last 5 minutes"
+
+  - name: alerts
+    interval: 30s
+    rules:
+      # Alert on too many open alerts
+      - alert: TooManyOpenAlerts
+        expr: garbage_chute_alerts_open > 100
+        for: 10m
+        labels:
+          severity: warning
+          service: alerts
+        annotations:
+          summary: "Too many open alerts"
+          description: "More than 100 open alerts detected"
+
+      # Alert on high alert rate
+      - alert: HighAlertRate
+        expr: rate(garbage_chute_alerts_created[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: alerts
+        annotations:
+          summary: "High alert creation rate"
+          description: "Alert creation rate exceeds 10 per minute"
+
+  - name: infrastructure
+    interval: 30s
+    rules:
+      # Alert on high memory usage
+      - alert: HighMemoryUsage
+        expr: container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is above 85%"
+
+      # Alert on high CPU usage
+      - alert: HighCpuUsage
+        expr: rate(container_cpu_usage_seconds_total[5m]) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is above 80%"
+
+      # Alert on low disk space
+      - alert: LowDiskSpace
+        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk space"
+          description: "Less than 10% disk space remaining"

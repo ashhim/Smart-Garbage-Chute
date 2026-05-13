@@ -1,9 +1,57 @@
+# Prometheus Configuration for Smart Garbage Chute System
 global:
   scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'garbage-chute'
+    environment: 'production'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+rule_files:
+  - '/etc/prometheus/rules/*.yml'
+
 scrape_configs:
-  - job_name: backend
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Backend FastAPI metrics
+  - job_name: 'backend'
     static_configs:
       - targets: ['backend:8000']
-  - job_name: ai-service
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # AI Service metrics
+  - job_name: 'ai-service'
     static_configs:
       - targets: ['ai-service:8001']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # PostgreSQL exporter
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+
+  # Redis exporter
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+
+  # MQTT broker metrics
+  - job_name: 'mqtt'
+    static_configs:
+      - targets: ['mosquitto:1883']
+
+  # Node exporter (system metrics)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+

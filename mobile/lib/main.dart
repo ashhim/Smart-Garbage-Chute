@@ -1,23 +1,62 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:provider/provider.dart';
+import 'screens/login_screen.dart';
+import 'screens/dashboard_screen.dart';
+import 'services/auth_service.dart';
+import 'services/api_service.dart';
+import 'services/notification_service.dart';
 
-void main() => runApp(const App());
-
-class App extends StatelessWidget {
-  const App({super.key});
-  @override
-  Widget build(BuildContext context) => MaterialApp(
-    debugShowCheckedModeBanner: false,
-    home: const HomePage(),
-    theme: ThemeData.dark(useMaterial3: true),
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize notification service
+  await NotificationService().initialize();
+  
+  runApp(
+    MultiProvider(
+      providers: [
+        Provider<ApiService>(create: (_) => ApiService()),
+        ChangeNotifierProvider<AuthService>(
+          create: (context) => AuthService(
+            apiService: context.read<ApiService>(),
+          ),
+        ),
+      ],
+      child: const SmartGarbageApp(),
+    ),
   );
 }
 
-class HomePage extends StatefulWidget { const HomePage({super.key}); @override State<HomePage> createState() => _HomePageState(); }
+class SmartGarbageApp extends StatelessWidget {
+  const SmartGarbageApp({Key? key}) : super(key: key);
 
-class _HomePageState extends State<HomePage> {
-  late final WebSocketChannel channel;
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Smart Garbage Chute',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF0066CC),
+          brightness: Brightness.light,
+        ),
+        useMaterial3: true,
+        appBarTheme: const AppBarTheme(
+          elevation: 0,
+          centerTitle: true,
+        ),
+      ),
+      home: Consumer<AuthService>(
+        builder: (context, authService, _) {
+          if (authService.isAuthenticated) {
+            return const DashboardScreen();
+          } else {
+            return const LoginScreen();
+          }
+        },
+      ),
+    );
+  }
+}
   final List<String> events = [];
 
   @override

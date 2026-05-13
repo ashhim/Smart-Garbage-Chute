@@ -45,8 +45,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       aiEvents: aiPayload.map(AiEvent.fromJson).toList(),
       maintenanceLogs: maintenancePayload.map(MaintenanceLog.fromJson).toList(),
       otaJobs: otaPayload.map(OtaJob.fromJson).toList(),
-      apiBaseUrl: apiService.apiBaseUrl,
-      websocketUrl: apiService.websocketUrl,
+      serverDisplayName: apiService.serverDisplayName,
+      transportLabel: apiService.useHttps ? 'HTTPS' : 'HTTP',
     );
   }
 
@@ -210,9 +210,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 12),
-                      Text('API: ${data.apiBaseUrl}'),
+                      Text('Server: ${data.serverDisplayName}'),
                       const SizedBox(height: 8),
-                      Text('WebSocket: ${data.websocketUrl}'),
+                      Text('Transport: ${data.transportLabel}'),
                     ],
                   ),
                 ),
@@ -240,8 +240,8 @@ class _OperationsData {
     required this.aiEvents,
     required this.maintenanceLogs,
     required this.otaJobs,
-    required this.apiBaseUrl,
-    required this.websocketUrl,
+    required this.serverDisplayName,
+    required this.transportLabel,
   });
 
   final int aiEvents24h;
@@ -250,6 +250,6 @@ class _OperationsData {
   final List<AiEvent> aiEvents;
   final List<MaintenanceLog> maintenanceLogs;
   final List<OtaJob> otaJobs;
-  final String apiBaseUrl;
-  final String websocketUrl;
+  final String serverDisplayName;
+  final String transportLabel;
 }

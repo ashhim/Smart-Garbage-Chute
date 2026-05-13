@@ -481,7 +481,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               runSpacing: 8,
               children: [
                 Chip(label: Text(currentUser?.roleLabel ?? 'Viewer')),
-                Chip(label: Text('API: ${apiService.apiBaseUrl}')),
+                Chip(label: Text('Server: ${apiService.serverDisplayName}')),
+                Chip(label: Text(apiService.useHttps ? 'HTTPS' : 'HTTP')),
                 if (currentUser?.readOnly ?? false)
                   const Chip(label: Text('Read-only access')),
               ],

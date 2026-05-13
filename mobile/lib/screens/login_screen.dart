@@ -18,30 +18,14 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _passwordController = TextEditingController(
     text: 'Admin@12345',
   );
-  final TextEditingController _apiBaseController = TextEditingController();
 
   bool _isLoading = false;
-  bool _isProbing = false;
-  bool _endpointInitialized = false;
   String? _errorMessage;
-  String? _probeMessage;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_endpointInitialized) {
-      return;
-    }
-
-    _apiBaseController.text = context.read<ApiService>().apiBaseUrl;
-    _endpointInitialized = true;
-  }
 
   @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
-    _apiBaseController.dispose();
     super.dispose();
   }
 
@@ -55,14 +39,11 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
-      _probeMessage = null;
     });
 
-    final apiService = context.read<ApiService>();
     final authService = context.read<AuthService>();
 
     try {
-      await apiService.configureBaseUrl(_apiBaseController.text);
       final success = await authService.login(
         _emailController.text.trim(),
         _passwordController.text,
@@ -76,7 +57,7 @@ class _LoginScreenState extends State<LoginScreen> {
         _isLoading = false;
         if (!success) {
           _errorMessage = authService.lastError ??
-              'Login failed. Verify the backend URL and seeded credentials.';
+              'Login failed. Verify your credentials and server connection.';
         }
       });
     } catch (error) {
@@ -91,98 +72,14 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _testConnection() async {
-    setState(() {
-      _isProbing = true;
-      _errorMessage = null;
-      _probeMessage = null;
-    });
-
-    final apiService = context.read<ApiService>();
-    try {
-      await apiService.configureBaseUrl(_apiBaseController.text);
-      final response = await apiService.probe();
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _isProbing = false;
-        _probeMessage =
-            'Backend reachable. API health: ${response['status'] ?? 'ok'}.';
-      });
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _isProbing = false;
-        _errorMessage = 'Connection test failed: $error';
-      });
-    }
-  }
-
-  Future<void> _autoDetectEndpoint() async {
-    setState(() {
-      _isProbing = true;
-      _errorMessage = null;
-      _probeMessage = null;
-    });
-
-    final apiService = context.read<ApiService>();
-    try {
-      final detected = await apiService.discoverAndConfigure();
-
-      if (!mounted) {
-        return;
-      }
-
-      if (!detected) {
-        setState(() {
-          _isProbing = false;
-          _errorMessage =
-              'No reachable backend detected. For LAN testing, enter the computer IP or run the proxy on port 80.';
-        });
-        return;
-      }
-
-      _apiBaseController.text = apiService.apiBaseUrl;
-      final response = await apiService.probe();
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _isProbing = false;
-        _probeMessage =
-            'Detected ${apiService.apiBaseUrl}. API health: ${response['status'] ?? 'ok'}.';
-      });
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _isProbing = false;
-        _errorMessage = 'Auto-detect failed: $error';
-      });
-    }
-  }
-
-  void _usePreset(String value) {
-    setState(() {
-      _apiBaseController.text = value;
-      _probeMessage = null;
-      _errorMessage = null;
-    });
+  Future<void> _changeServer() async {
+    await context.read<ApiService>().clearConnection();
   }
 
   @override
   Widget build(BuildContext context) {
     final apiService = context.watch<ApiService>();
+    final schemeLabel = apiService.useHttps ? 'HTTPS' : 'HTTP';
 
     return Scaffold(
       body: SafeArea(
@@ -209,7 +106,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Mobile control-room client for live alerts, rooms, devices, operations, and role-based access.',
+                    'Sign in to access live alerts, room status, devices, and operational monitoring.',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: Colors.grey.shade700,
                         ),
@@ -221,59 +118,63 @@ class _LoginScreenState extends State<LoginScreen> {
                       padding: const EdgeInsets.all(20),
                       child: Column(
                         children: [
-                          TextField(
-                            controller: _apiBaseController,
-                            decoration: InputDecoration(
-                              labelText: 'Backend API URL',
-                              helperText:
-                                  'Examples: http://10.0.2.2/api, http://10.0.2.2:8520/api, or http://192.168.1.20/api',
-                              prefixIcon: const Icon(Icons.link_outlined),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey.shade50,
+                              borderRadius: BorderRadius.circular(14),
+                              border:
+                                  Border.all(color: Colors.blueGrey.shade100),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.cloud_done_outlined,
+                                  color: Colors.blueGrey.shade700,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Connected Server',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelLarge
+                                            ?.copyWith(
+                                              color: Colors.blueGrey.shade700,
+                                            ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        apiService.serverDisplayName,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleMedium
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Chip(label: Text(schemeLabel)),
+                              ],
+                            ),
+                          ),
+                          if (!apiService.usesBuildOverride) ...[
+                            const SizedBox(height: 12),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed: _isLoading ? null : _changeServer,
+                                child: const Text('Change Server'),
                               ),
                             ),
-                            keyboardType: TextInputType.url,
-                            autocorrect: false,
-                          ),
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              OutlinedButton(
-                                onPressed: () => _usePreset(
-                                  'http://10.0.2.2/api',
-                                ),
-                                child: const Text('Android Emulator'),
-                              ),
-                              OutlinedButton(
-                                onPressed: () => _usePreset(
-                                  apiService.defaultApiBaseUrl,
-                                ),
-                                child: const Text('Default'),
-                              ),
-                              OutlinedButton(
-                                onPressed: () => _usePreset(
-                                  'http://127.0.0.1:8520/api',
-                                ),
-                                child: const Text('Raw Backend'),
-                              ),
-                              TextButton(
-                                onPressed: _isLoading || _isProbing
-                                    ? null
-                                    : _autoDetectEndpoint,
-                                child: const Text('Auto Detect'),
-                              ),
-                              TextButton(
-                                onPressed: () async {
-                                  await apiService.resetBaseUrl();
-                                  _usePreset(apiService.apiBaseUrl);
-                                },
-                                child: const Text('Reset'),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
+                          ],
                           TextField(
                             controller: _emailController,
                             decoration: InputDecoration(
@@ -312,76 +213,25 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                             ),
                           ],
-                          if (_probeMessage != null) ...[
-                            const SizedBox(height: 16),
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.green.shade50,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                _probeMessage!,
-                                style: TextStyle(color: Colors.green.shade800),
-                              ),
-                            ),
-                          ],
                           const SizedBox(height: 24),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: OutlinedButton(
-                                  onPressed: _isLoading || _isProbing
-                                      ? null
-                                      : _testConnection,
-                                  child: _isProbing
-                                      ? const SizedBox(
-                                          width: 18,
-                                          height: 18,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                          ),
-                                        )
-                                      : const Text('Test Connection'),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: FilledButton(
-                                  onPressed: _isLoading ? null : _handleLogin,
-                                  child: _isLoading
-                                      ? const SizedBox(
-                                          width: 20,
-                                          height: 20,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                          ),
-                                        )
-                                      : const Text('Sign In'),
-                                ),
-                              ),
-                            ],
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton(
+                              onPressed: _isLoading ? null : _handleLogin,
+                              child: _isLoading
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Text('Sign In'),
+                            ),
                           ),
                         ],
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Current API: ${apiService.apiBaseUrl}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Colors.grey.shade600,
-                        ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Emulator uses 10.0.2.2. LAN phones should use the computer IP with /api or :8520/api unless a production HTTPS domain is defined.',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Colors.grey.shade600,
-                        ),
-                    textAlign: TextAlign.center,
                   ),
                 ],
               ),

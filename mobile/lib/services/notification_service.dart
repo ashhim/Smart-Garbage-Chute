@@ -9,6 +9,8 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 
+import 'api_service.dart';
+
 const String _backgroundAlertTask = 'smart_garbage_alert_sync';
 
 @pragma('vm:entry-point')
@@ -27,7 +29,7 @@ class NotificationService {
   static const _alertChannelId = 'smart-garbage-alerts';
   static const _lastNotifiedAlertIdKey = 'last_notified_alert_id';
   static const _tokenKey = 'auth_token';
-  static const _apiBaseKey = 'api_base_url';
+  static const _apiBaseKey = ApiService.apiBaseStorageKey;
 
   factory NotificationService() => instance;
 
@@ -179,7 +181,10 @@ class NotificationService {
       }
 
       final apiBaseUrl =
-          await _storage.read(key: _apiBaseKey) ?? 'http://127.0.0.1/api';
+          await _storage.read(key: _apiBaseKey) ?? _buildOverrideApiBaseUrl();
+      if (apiBaseUrl == null || apiBaseUrl.trim().isEmpty) {
+        return;
+      }
       final response = await http.get(
         Uri.parse('${_normalizeApiBaseUrl(apiBaseUrl)}/alerts'),
         headers: {
@@ -280,5 +285,13 @@ class NotificationService {
       return value.replaceFirst(RegExp(r'/api/.+$'), '/api');
     }
     return '$value/api';
+  }
+
+  static String? _buildOverrideApiBaseUrl() {
+    const defined = String.fromEnvironment('API_BASE_URL');
+    if (defined.trim().isEmpty) {
+      return null;
+    }
+    return _normalizeApiBaseUrl(defined);
   }
 }

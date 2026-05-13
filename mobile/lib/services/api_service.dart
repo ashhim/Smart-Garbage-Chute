@@ -8,65 +8,109 @@ import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 class ApiService extends ChangeNotifier {
-  ApiService({
-    String? apiBaseUrl,
-    String? websocketUrl,
-  })  : _defaultApiBaseUrl = _normalizeApiBaseUrl(
-          apiBaseUrl ?? _resolveDefaultApiBaseUrl(),
-        ),
-        _defaultWebSocketUrl = websocketUrl ??
-            _deriveWebSocketUrl(apiBaseUrl ?? _resolveDefaultApiBaseUrl()),
-        _apiBaseUrl = _normalizeApiBaseUrl(apiBaseUrl ?? _resolveDefaultApiBaseUrl()),
-        _websocketUrl =
-            websocketUrl ?? _deriveWebSocketUrl(apiBaseUrl ?? _resolveDefaultApiBaseUrl());
+  ApiService({String? apiBaseUrlOverride})
+      : _buildOverrideConfig = _parseBuildOverride(apiBaseUrlOverride);
 
-  static const _apiBaseKey = 'api_base_url';
-  static const _webSocketKey = 'ws_url';
+  static const apiBaseStorageKey = 'api_base_url';
+  static const webSocketStorageKey = 'ws_url';
+  static const _serverHostKey = 'server_host';
+  static const _serverPortKey = 'server_port';
+  static const _serverHttpsKey = 'server_https';
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
-  final String _defaultApiBaseUrl;
-  final String _defaultWebSocketUrl;
+  final ServerConnectionConfig? _buildOverrideConfig;
 
-  String _apiBaseUrl;
-  String _websocketUrl;
+  ServerConnectionConfig? _connectionConfig;
+  String _apiBaseUrl = '';
+  String _websocketUrl = '';
   String? _token;
 
   String get apiBaseUrl => _apiBaseUrl;
   String get websocketUrl => _websocketUrl;
-  String get defaultApiBaseUrl => _defaultApiBaseUrl;
+  String get serverDisplayName =>
+      _connectionConfig?.displayLabel ?? 'Server not configured';
+  String get serverHost => _connectionConfig?.host ?? '';
+  String get serverPort => _connectionConfig?.port?.toString() ?? '';
+  bool get useHttps => _connectionConfig?.useHttps ?? false;
+  bool get hasConnectionConfig => _connectionConfig != null;
+  bool get usesBuildOverride => _buildOverrideConfig != null;
 
   Future<void> initialize() async {
-    final savedApiBaseUrl = await _storage.read(key: _apiBaseKey);
-    final savedWebSocketUrl = await _storage.read(key: _webSocketKey);
-
-    if (savedApiBaseUrl != null && savedApiBaseUrl.trim().isNotEmpty) {
-      _apiBaseUrl = _normalizeApiBaseUrl(savedApiBaseUrl);
-      _websocketUrl = savedWebSocketUrl != null && savedWebSocketUrl.isNotEmpty
-          ? savedWebSocketUrl
-          : _deriveWebSocketUrl(_apiBaseUrl);
+    final buildOverride = _buildOverrideConfig;
+    if (buildOverride != null) {
+      _applyConfig(buildOverride);
       return;
     }
 
-    _apiBaseUrl = _defaultApiBaseUrl;
-    _websocketUrl = _defaultWebSocketUrl;
+    final savedHost = await _storage.read(key: _serverHostKey);
+    final savedPort = await _storage.read(key: _serverPortKey);
+    final savedHttps = await _storage.read(key: _serverHttpsKey);
+    final savedApiBaseUrl = await _storage.read(key: apiBaseStorageKey);
+
+    if (savedHost != null && savedHost.trim().isNotEmpty) {
+      final port = int.tryParse(savedPort ?? '');
+      final useHttps = savedHttps == 'true';
+      _applyConfig(
+        ServerConnectionConfig(
+          host: savedHost.trim(),
+          port: port,
+          useHttps: useHttps,
+        ),
+      );
+      return;
+    }
+
+    if (savedApiBaseUrl != null && savedApiBaseUrl.trim().isNotEmpty) {
+      final migrated = ServerConnectionConfig.fromApiBaseUrl(savedApiBaseUrl);
+      if (migrated != null) {
+        _applyConfig(migrated);
+        return;
+      }
+    }
+
+    _connectionConfig = null;
+    _apiBaseUrl = '';
+    _websocketUrl = '';
   }
 
-  Future<void> configureBaseUrl(String rawValue) async {
-    final normalizedApiBaseUrl = _normalizeApiBaseUrl(rawValue);
-    _apiBaseUrl = normalizedApiBaseUrl;
-    _websocketUrl = _deriveWebSocketUrl(normalizedApiBaseUrl);
+  Future<ConnectionValidationResult> validateAndConfigureConnection({
+    required String hostInput,
+    String? portInput,
+    required bool useHttps,
+  }) async {
+    if (usesBuildOverride) {
+      final override = _buildOverrideConfig!;
+      final status = await _validateConnection(override);
+      _applyConfig(override, notifyListenersAfterUpdate: true);
+      return status;
+    }
 
-    await _storage.write(key: _apiBaseKey, value: _apiBaseUrl);
-    await _storage.write(key: _webSocketKey, value: _websocketUrl);
-    notifyListeners();
+    final config = ServerConnectionConfig.fromUserInput(
+      hostInput: hostInput,
+      portInput: portInput,
+      useHttps: useHttps,
+    );
+    final status = await _validateConnection(config);
+    await _persistConfig(config);
+    _applyConfig(config, notifyListenersAfterUpdate: true);
+    return status;
   }
 
-  Future<void> resetBaseUrl() async {
-    _apiBaseUrl = _defaultApiBaseUrl;
-    _websocketUrl = _defaultWebSocketUrl;
+  Future<void> clearConnection() async {
+    if (usesBuildOverride) {
+      return;
+    }
 
-    await _storage.delete(key: _apiBaseKey);
-    await _storage.delete(key: _webSocketKey);
+    _connectionConfig = null;
+    _apiBaseUrl = '';
+    _websocketUrl = '';
+    _token = null;
+
+    await _storage.delete(key: _serverHostKey);
+    await _storage.delete(key: _serverPortKey);
+    await _storage.delete(key: _serverHttpsKey);
+    await _storage.delete(key: apiBaseStorageKey);
+    await _storage.delete(key: webSocketStorageKey);
     notifyListeners();
   }
 
@@ -100,35 +144,33 @@ class ApiService extends ChangeNotifier {
   }
 
   Future<Map<String, dynamic>> probe() async {
-    return _probeBaseUrl(_apiBaseUrl);
+    final config = _requireConnectionConfig();
+    return _healthCheck(config);
   }
 
   Future<bool> isCurrentEndpointReachable() async {
+    final config = _connectionConfig;
+    if (config == null) {
+      return false;
+    }
+
     try {
-      await _probeBaseUrl(_apiBaseUrl);
+      await _healthCheck(config);
       return true;
     } catch (_) {
       return false;
     }
   }
 
-  Future<bool> discoverAndConfigure({bool includeLanDiscovery = true}) async {
-    final detected = await _discoverReachableBaseUrl(
-      includeLanDiscovery: includeLanDiscovery,
-    );
-    if (detected == null) {
-      return false;
-    }
-
-    if (detected != _apiBaseUrl) {
-      await configureBaseUrl(detected);
-    }
-    return true;
-  }
-
   WebSocketChannel connectWebSocket() {
+    if (_websocketUrl.isEmpty) {
+      throw ConnectionConfigurationException(
+        'Server connection is not configured.',
+      );
+    }
+
     final uri = Uri.parse(_websocketUrl);
-    final wsUri = _token == null
+    final wsUri = _token == null || _token!.isEmpty
         ? uri
         : uri.replace(
             queryParameters: {
@@ -164,7 +206,9 @@ class ApiService extends ChangeNotifier {
     if (payload is Map) {
       return payload.cast<String, dynamic>();
     }
-    throw ApiException('Unexpected response payload');
+    throw InvalidBackendResponseException(
+      'The server returned an unexpected response format.',
+    );
   }
 
   Uri _buildUri(String endpoint) {
@@ -172,7 +216,9 @@ class ApiService extends ChangeNotifier {
       return Uri.parse(endpoint);
     }
 
-    return _buildUriForBase(_apiBaseUrl, endpoint);
+    final baseUrl = _requireConnectionConfig().apiBaseUrl;
+    final normalizedEndpoint = endpoint.startsWith('/') ? endpoint : '/$endpoint';
+    return Uri.parse('$baseUrl$normalizedEndpoint');
   }
 
   Map<String, String> _headers() {
@@ -184,260 +230,349 @@ class ApiService extends ChangeNotifier {
   }
 
   dynamic _decodeResponse(http.Response response) {
-    final body = response.body.isEmpty ? null : jsonDecode(response.body);
+    dynamic body;
+    if (response.body.isNotEmpty) {
+      try {
+        body = jsonDecode(response.body);
+      } catch (_) {
+        body = response.body;
+      }
+    }
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return body;
     }
 
+    final message = _extractError(body, response.statusCode);
     if (response.statusCode == 401) {
-      throw UnauthorizedException(_extractError(body, response.statusCode));
+      throw UnauthorizedException(message);
     }
 
-    throw ApiException(_extractError(body, response.statusCode));
+    throw ApiException(message);
   }
 
   String _extractError(dynamic body, int statusCode) {
     if (body is Map && body['detail'] != null) {
       return body['detail'].toString();
     }
+    if (body is String && body.trim().isNotEmpty) {
+      return body;
+    }
     return 'HTTP $statusCode';
   }
 
-  Future<Map<String, dynamic>> _probeBaseUrl(String baseUrl) async {
-    final response = await http
-        .get(
-          _buildUriForBase(baseUrl, '/health'),
-          headers: const {'Content-Type': 'application/json'},
-        )
-        .timeout(const Duration(milliseconds: 1200));
+  Future<ConnectionValidationResult> _validateConnection(
+    ServerConnectionConfig config,
+  ) async {
+    final health = await _healthCheck(config);
+    await _verifyAuthEndpoint(config);
+    return ConnectionValidationResult(
+      serverDisplayName: config.displayLabel,
+      apiBaseUrl: config.apiBaseUrl,
+      healthStatus: health['status']?.toString() ?? 'ok',
+    );
+  }
 
-    final payload = response.body.isEmpty
-        ? const <String, dynamic>{}
-        : expectMap(jsonDecode(response.body));
-
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw ApiException(_extractError(payload, response.statusCode));
+  Future<Map<String, dynamic>> _healthCheck(
+    ServerConnectionConfig config,
+  ) async {
+    late http.Response response;
+    try {
+      response = await http
+          .get(
+            config.apiUri('/health'),
+            headers: const {'Content-Type': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 3));
+    } on TimeoutException {
+      throw ConnectionTimeoutException(
+        'The server did not respond in time.',
+      );
+    } on SocketException {
+      throw HostUnreachableException(
+        'Unable to reach the selected server.',
+      );
+    } catch (_) {
+      throw HostUnreachableException(
+        'Unable to reach the selected server.',
+      );
     }
 
+    final payload = _safeDecodeMap(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw InvalidBackendResponseException(
+        'The server responded, but the health check failed.',
+      );
+    }
+    if (payload == null || payload['status'] == null) {
+      throw InvalidBackendResponseException(
+        'The server response does not match the monitoring backend.',
+      );
+    }
     return payload;
   }
 
-  Future<String?> _discoverReachableBaseUrl({
-    required bool includeLanDiscovery,
-  }) async {
-    final detectedFromKnown =
-        await _probeCandidates(_candidateBaseUrls(), timeout: const Duration(milliseconds: 900));
-    if (detectedFromKnown != null) {
-      return detectedFromKnown;
+  Future<void> _verifyAuthEndpoint(ServerConnectionConfig config) async {
+    late http.Response response;
+    try {
+      response = await http
+          .post(
+            config.apiUri('/auth/login'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode(
+              const {
+                'email': 'connection-check',
+                'password': 'connection-check',
+              },
+            ),
+          )
+          .timeout(const Duration(seconds: 3));
+    } on TimeoutException {
+      throw ConnectionTimeoutException(
+        'The authentication service did not respond in time.',
+      );
+    } on SocketException {
+      throw HostUnreachableException(
+        'Unable to reach the selected server.',
+      );
+    } catch (_) {
+      throw HostUnreachableException(
+        'Unable to reach the selected server.',
+      );
     }
 
-    if (!includeLanDiscovery) {
+    if (response.statusCode == 404) {
+      throw AuthEndpointUnavailableException(
+        'The server is reachable, but sign-in is unavailable.',
+      );
+    }
+    if (response.statusCode >= 500) {
+      throw AuthEndpointUnavailableException(
+        'The server is reachable, but sign-in is unavailable.',
+      );
+    }
+    if (response.statusCode == 200 ||
+        response.statusCode == 400 ||
+        response.statusCode == 401 ||
+        response.statusCode == 403 ||
+        response.statusCode == 422) {
+      return;
+    }
+
+    throw InvalidBackendResponseException(
+      'The server does not expose the expected sign-in API.',
+    );
+  }
+
+  Map<String, dynamic>? _safeDecodeMap(String rawBody) {
+    if (rawBody.trim().isEmpty) {
       return null;
     }
 
-    return _discoverLanBaseUrl();
-  }
-
-  Future<String?> _probeCandidates(
-    List<String> candidates, {
-    Duration timeout = const Duration(milliseconds: 900),
-  }) async {
-    final uniqueCandidates = <String>{};
-    final normalizedCandidates = <String>[];
-    for (final candidate in candidates) {
-      final normalized = _normalizeApiBaseUrl(candidate);
-      if (uniqueCandidates.add(normalized)) {
-        normalizedCandidates.add(normalized);
+    try {
+      final decoded = jsonDecode(rawBody);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
       }
-    }
-
-    for (final candidate in normalizedCandidates) {
-      try {
-        await http
-            .get(
-              _buildUriForBase(candidate, '/health'),
-              headers: const {'Content-Type': 'application/json'},
-            )
-            .timeout(timeout);
-        return candidate;
-      } catch (_) {
-        continue;
+      if (decoded is Map) {
+        return decoded.cast<String, dynamic>();
       }
+    } catch (_) {
+      return null;
     }
 
     return null;
   }
 
-  Future<String?> _discoverLanBaseUrl() async {
-    try {
-      final privateInterfaces = await NetworkInterface.list(
-        includeLoopback: false,
-        type: InternetAddressType.IPv4,
+  ServerConnectionConfig _requireConnectionConfig() {
+    final config = _connectionConfig;
+    if (config == null) {
+      throw ConnectionConfigurationException(
+        'Server connection is not configured.',
       );
-      final prefixes = <String>{};
-      final ownAddresses = <String>{};
+    }
+    return config;
+  }
 
-      for (final interface in privateInterfaces) {
-        for (final address in interface.addresses) {
-          if (!_isPrivateIpv4(address.address)) {
-            continue;
-          }
-          ownAddresses.add(address.address);
-          final parts = address.address.split('.');
-          if (parts.length == 4) {
-            prefixes.add('${parts[0]}.${parts[1]}.${parts[2]}');
-          }
-        }
-      }
+  Future<void> _persistConfig(ServerConnectionConfig config) async {
+    await _storage.write(key: _serverHostKey, value: config.host);
+    await _storage.write(
+      key: _serverPortKey,
+      value: config.port?.toString() ?? '',
+    );
+    await _storage.write(
+      key: _serverHttpsKey,
+      value: config.useHttps.toString(),
+    );
+    await _storage.write(key: apiBaseStorageKey, value: config.apiBaseUrl);
+    await _storage.write(key: webSocketStorageKey, value: config.websocketUrl);
+  }
 
-      final hostCandidates = <String>[];
-      const preferredOctets = <int>[1, 2, 10, 20, 50, 100, 101, 110, 150, 200];
-      for (final prefix in prefixes) {
-        final orderedOctets = <int>[
-          ...preferredOctets,
-          ...List.generate(254, (index) => index + 1)
-              .where((octet) => !preferredOctets.contains(octet)),
-        ];
-        for (final octet in orderedOctets) {
-          final host = '$prefix.$octet';
-          if (ownAddresses.contains(host)) {
-            continue;
-          }
-          hostCandidates.add('http://$host/api');
-          hostCandidates.add('http://$host:8520/api');
-        }
-      }
+  void _applyConfig(
+    ServerConnectionConfig config, {
+    bool notifyListenersAfterUpdate = false,
+  }) {
+    _connectionConfig = config;
+    _apiBaseUrl = config.apiBaseUrl;
+    _websocketUrl = config.websocketUrl;
+    if (notifyListenersAfterUpdate) {
+      notifyListeners();
+    }
+  }
 
-      return _probeCandidates(
-        hostCandidates,
-        timeout: const Duration(milliseconds: 350),
-      );
-    } catch (_) {
+  static ServerConnectionConfig? _parseBuildOverride(String? apiBaseOverride) {
+    final rawValue = apiBaseOverride ?? const String.fromEnvironment('API_BASE_URL');
+    if (rawValue.trim().isEmpty) {
       return null;
     }
+    return ServerConnectionConfig.fromApiBaseUrl(rawValue.trim());
   }
+}
 
-  List<String> _candidateBaseUrls() {
-    final candidates = <String>[
-      _apiBaseUrl,
-      _defaultApiBaseUrl,
-    ];
+class ServerConnectionConfig {
+  const ServerConnectionConfig({
+    required this.host,
+    required this.useHttps,
+    this.port,
+  });
 
-    if (Platform.isAndroid) {
-      candidates.addAll(const [
-        'http://10.0.2.2/api',
-        'http://10.0.2.2:8520/api',
-      ]);
-    }
+  final String host;
+  final int? port;
+  final bool useHttps;
 
-    candidates.addAll(const [
-      'http://127.0.0.1/api',
-      'http://127.0.0.1:8520/api',
-      'http://localhost/api',
-      'http://localhost:8520/api',
-    ]);
+  String get displayLabel => port == null ? host : '$host:$port';
 
-    return candidates;
-  }
+  String get apiBaseUrl => _uriForPath('/api').toString();
 
-  static bool _isPrivateIpv4(String address) {
-    final parts = address.split('.');
-    if (parts.length != 4) {
-      return false;
-    }
-
-    final first = int.tryParse(parts[0]);
-    final second = int.tryParse(parts[1]);
-    if (first == null || second == null) {
-      return false;
-    }
-
-    return first == 10 ||
-        (first == 172 && second >= 16 && second <= 31) ||
-        (first == 192 && second == 168);
-  }
-
-  static Uri _buildUriForBase(String baseUrl, String endpoint) {
-    final normalizedBase = baseUrl.endsWith('/')
-        ? baseUrl.substring(0, baseUrl.length - 1)
-        : baseUrl;
-    final normalizedEndpoint = endpoint.startsWith('/') ? endpoint : '/$endpoint';
-    return Uri.parse('$normalizedBase$normalizedEndpoint');
-  }
-
-  static String _resolveDefaultApiBaseUrl() {
-    const defined = String.fromEnvironment('API_BASE_URL');
-    if (defined.isNotEmpty) {
-      return _normalizeApiBaseUrl(defined);
-    }
-
-    if (Platform.isAndroid) {
-      return 'http://10.0.2.2/api';
-    }
-
-    return 'http://127.0.0.1/api';
-  }
-
-  static String _normalizeApiBaseUrl(String rawValue) {
-    var value = _sanitizeRawValue(rawValue);
-    if (value.isEmpty) {
-      value = _resolveDefaultApiBaseUrl();
-    }
-
-    if (!value.startsWith('http://') && !value.startsWith('https://')) {
-      value = 'http://$value';
-    }
-
-    final uri = Uri.parse(value);
-    final pathSegments =
-        uri.pathSegments.where((segment) => segment.isNotEmpty).toList();
-    if (pathSegments.isEmpty || pathSegments.last != 'api') {
-      pathSegments.add('api');
-    }
-
+  String get websocketUrl {
+    final uri = _uriForPath('/ws');
     return uri
-        .replace(pathSegments: pathSegments, queryParameters: const {})
-        .toString()
-        .replaceFirst(RegExp(r'/$'), '');
-  }
-
-  static String _sanitizeRawValue(String rawValue) {
-    var value = rawValue.trim();
-    if (value.isEmpty) {
-      return value;
-    }
-
-    final queryIndex = value.indexOf('?');
-    if (queryIndex >= 0) {
-      value = value.substring(0, queryIndex);
-    }
-    final fragmentIndex = value.indexOf('#');
-    if (fragmentIndex >= 0) {
-      value = value.substring(0, fragmentIndex);
-    }
-
-    return value.replaceFirst(RegExp(r'/+$'), '');
-  }
-
-  static String _deriveWebSocketUrl(String apiBaseUrl) {
-    final normalizedApiBaseUrl = _normalizeApiBaseUrl(apiBaseUrl);
-    final apiUri = Uri.parse(normalizedApiBaseUrl);
-    final pathSegments =
-        apiUri.pathSegments.where((segment) => segment.isNotEmpty).toList();
-    if (pathSegments.isNotEmpty && pathSegments.last == 'api') {
-      pathSegments.removeLast();
-    }
-    pathSegments.add('ws');
-
-    return apiUri
-        .replace(
-          scheme: apiUri.scheme == 'https' ? 'wss' : 'ws',
-          pathSegments: pathSegments,
-          queryParameters: const {},
-        )
+        .replace(scheme: useHttps ? 'wss' : 'ws')
         .toString();
   }
+
+  Uri apiUri(String endpoint) {
+    final normalizedEndpoint = endpoint.startsWith('/') ? endpoint : '/$endpoint';
+    return Uri.parse('$apiBaseUrl$normalizedEndpoint');
+  }
+
+  factory ServerConnectionConfig.fromUserInput({
+    required String hostInput,
+    String? portInput,
+    required bool useHttps,
+  }) {
+    final parsedHost = _parseHostInput(hostInput);
+    final host = parsedHost.host.trim();
+    if (host.isEmpty) {
+      throw ConnectionConfigurationException(
+        'Enter a server IP or host name.',
+      );
+    }
+
+    int? port = parsedHost.port;
+    final portValue = (portInput ?? '').trim();
+    if (portValue.isNotEmpty) {
+      port = int.tryParse(portValue);
+      if (port == null || port < 1 || port > 65535) {
+        throw ConnectionConfigurationException(
+          'Enter a valid port number.',
+        );
+      }
+    }
+
+    return ServerConnectionConfig(
+      host: host,
+      port: port,
+      useHttps: useHttps,
+    );
+  }
+
+  static ServerConnectionConfig? fromApiBaseUrl(String rawValue) {
+    final normalized = rawValue.trim();
+    if (normalized.isEmpty) {
+      return null;
+    }
+
+    final uri = Uri.tryParse(normalized);
+    if (uri == null || uri.host.isEmpty) {
+      return null;
+    }
+
+    final useHttps = uri.scheme.toLowerCase() == 'https';
+    final port = uri.hasPort ? uri.port : null;
+    return ServerConnectionConfig(
+      host: uri.host,
+      port: port,
+      useHttps: useHttps,
+    );
+  }
+
+  Uri _uriForPath(String path) {
+    return Uri(
+      scheme: useHttps ? 'https' : 'http',
+      host: host,
+      port: port,
+      path: path,
+    );
+  }
+
+  static _ParsedHostInput _parseHostInput(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      return const _ParsedHostInput(host: '', port: null);
+    }
+
+    final candidate =
+        trimmed.contains('://') ? trimmed : 'http://$trimmed';
+    final uri = Uri.tryParse(candidate);
+    if (uri != null && uri.host.isNotEmpty) {
+      return _ParsedHostInput(
+        host: uri.host,
+        port: uri.hasPort ? uri.port : null,
+      );
+    }
+
+    var sanitized = trimmed;
+    if (sanitized.startsWith('http://')) {
+      sanitized = sanitized.substring(7);
+    } else if (sanitized.startsWith('https://')) {
+      sanitized = sanitized.substring(8);
+    }
+    if (sanitized.contains('/')) {
+      sanitized = sanitized.split('/').first;
+    }
+
+    if (sanitized.contains(':')) {
+      final lastColon = sanitized.lastIndexOf(':');
+      final host = sanitized.substring(0, lastColon);
+      final parsedPort = int.tryParse(sanitized.substring(lastColon + 1));
+      return _ParsedHostInput(host: host, port: parsedPort);
+    }
+
+    return _ParsedHostInput(host: sanitized, port: null);
+  }
+}
+
+class _ParsedHostInput {
+  const _ParsedHostInput({
+    required this.host,
+    required this.port,
+  });
+
+  final String host;
+  final int? port;
+}
+
+class ConnectionValidationResult {
+  const ConnectionValidationResult({
+    required this.serverDisplayName,
+    required this.apiBaseUrl,
+    required this.healthStatus,
+  });
+
+  final String serverDisplayName;
+  final String apiBaseUrl;
+  final String healthStatus;
 }
 
 class ApiException implements Exception {
@@ -451,4 +586,24 @@ class ApiException implements Exception {
 
 class UnauthorizedException extends ApiException {
   UnauthorizedException(super.message);
+}
+
+class ConnectionConfigurationException extends ApiException {
+  ConnectionConfigurationException(super.message);
+}
+
+class ConnectionTimeoutException extends ApiException {
+  ConnectionTimeoutException(super.message);
+}
+
+class HostUnreachableException extends ApiException {
+  HostUnreachableException(super.message);
+}
+
+class InvalidBackendResponseException extends ApiException {
+  InvalidBackendResponseException(super.message);
+}
+
+class AuthEndpointUnavailableException extends ApiException {
+  AuthEndpointUnavailableException(super.message);
 }

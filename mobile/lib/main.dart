@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'screens/connection_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/api_service.dart';
@@ -48,14 +49,18 @@ class SmartGarbageApp extends StatelessWidget {
           centerTitle: false,
         ),
       ),
-      home: Consumer<AuthService>(
-        builder: (context, authService, _) {
+      home: Consumer2<AuthService, ApiService>(
+        builder: (context, authService, apiService, _) {
           if (!authService.isReady) {
             return const _StartupScreen();
           }
 
           if (authService.isAuthenticated) {
             return const DashboardScreen();
+          }
+
+          if (!apiService.hasConnectionConfig) {
+            return const ConnectionScreen();
           }
 
           return const LoginScreen();

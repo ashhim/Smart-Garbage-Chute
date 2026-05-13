@@ -35,7 +35,9 @@ class AuthService extends ChangeNotifier {
     _email = await _storage.read(key: _emailKey);
     apiService.setToken(_token);
 
-    if (_token != null && _token!.isNotEmpty) {
+    if (_token != null &&
+        _token!.isNotEmpty &&
+        apiService.hasConnectionConfig) {
       try {
         await _loadCurrentUser();
         _isAuthenticated = true;
@@ -45,6 +47,10 @@ class AuthService extends ChangeNotifier {
         debugPrint('Auth restore error: $error');
         await _clearSession(notify: false);
       }
+    } else if (_token != null &&
+        _token!.isNotEmpty &&
+        !apiService.hasConnectionConfig) {
+      await _clearSession(notify: false);
     }
 
     _isReady = true;
@@ -55,15 +61,18 @@ class AuthService extends ChangeNotifier {
     _lastError = null;
 
     try {
+      if (!apiService.hasConnectionConfig) {
+        _lastError = 'Connect to the monitoring server before signing in.';
+        notifyListeners();
+        return false;
+      }
+
       final reachable = await apiService.isCurrentEndpointReachable();
       if (!reachable) {
-        final discovered = await apiService.discoverAndConfigure();
-        if (!discovered) {
-          _lastError =
-              'Backend not reachable. Use emulator auto-detect or enter the LAN host IP.';
-          notifyListeners();
-          return false;
-        }
+        _lastError =
+            'Unable to reach the selected monitoring server. Review the connection settings and try again.';
+        notifyListeners();
+        return false;
       }
 
       final result = await apiService.post('/auth/login', {

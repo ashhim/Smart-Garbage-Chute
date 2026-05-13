@@ -1,7 +1,87 @@
+# =========================
+# Node / Frontend
+# =========================
 node_modules/
 .next/
-.pio/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =========================
+# Python
+# =========================
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# =========================
+# Virtual Environments
+# =========================
+.venv/
+venv/
+env/
+
+# =========================
+# Environment Variables
+# =========================
 .env
+.env.local
+.env.*.local
+
+# =========================
+# Build / Distribution
+# =========================
 dist/
 build/
+coverage/
+
+# =========================
+# PlatformIO / Firmware
+# =========================
+.pio/
+.vscode/.browse.VC.db*
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+
+# =========================
+# Docker
+# =========================
+docker-data/
+tmp/
+
+# =========================
+# Misc
+# =========================
+*.bak
+*.tmp
+*.cache

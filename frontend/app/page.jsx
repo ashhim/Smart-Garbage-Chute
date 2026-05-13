@@ -1,7 +1,7 @@
 'use client';
 
-import useSWR from 'swr';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import useSWR from 'swr';
 import {
   Activity,
   AlertTriangle,
@@ -9,25 +9,19 @@ import {
   Building2,
   Camera,
   CheckCircle2,
-  Clock3,
   Cpu,
-  Loader2,
-  LogOut,
-  MapPinned,
-  PlayCircle,
   Radio,
-  RefreshCw,
-  Send,
   Server,
   ShieldCheck,
-  Square,
   Trash2,
-  TriangleAlert,
   Wifi,
 } from 'lucide-react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost/api';
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost/ws';
+import { AuthForm } from './components/auth-form';
+import { LoadingScreen, PortalShell } from './components/portal-shell';
+import { usePortalSession } from './components/session';
+import { API_BASE, WS_URL, apiUrl } from './lib/config';
+import { ACKNOWLEDGE_ROLES, SIMULATION_ROLES, SYSTEM_ADMIN_ROLES } from './lib/roles';
 
 function cn(...classes) {
   return classes.filter(Boolean).join(' ');
@@ -36,8 +30,7 @@ function cn(...classes) {
 function formatTime(value) {
   if (!value) return '--';
   try {
-    const date = new Date(value);
-    return date.toLocaleString();
+    return new Date(value).toLocaleString();
   } catch {
     return String(value);
   }
@@ -45,182 +38,6 @@ function formatTime(value) {
 
 function formatEventLabel(value) {
   return value ? String(value).replaceAll('_', ' ') : 'event';
-}
-
-function roomStatusStyles(status) {
-  switch (status) {
-    case 'attention':
-      return 'border-amber-400/20 bg-amber-500/10 text-amber-100';
-    case 'offline':
-      return 'border-rose-400/20 bg-rose-500/10 text-rose-100';
-    case 'active':
-      return 'border-cyan-400/20 bg-cyan-500/10 text-cyan-100';
-    case 'unassigned':
-      return 'border-slate-400/20 bg-slate-500/10 text-slate-200';
-    default:
-      return 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100';
-  }
-}
-
-function useFetcher() {
-  const [token, setToken] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [authError, setAuthError] = useState('');
-
-  useEffect(() => {
-    const cached = sessionStorage.getItem('sgc_token');
-    if (cached) {
-      setToken(cached);
-      setLoading(false);
-      return;
-    }
-
-    const login = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/auth/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: 'admin@alghurair.local',
-            password: 'Admin@12345',
-          }),
-        });
-
-        const data = await res.json();
-        if (data?.access_token) {
-          sessionStorage.setItem('sgc_token', data.access_token);
-          setToken(data.access_token);
-        } else {
-          setAuthError(data?.detail || 'Authentication failed');
-        }
-      } catch (error) {
-        setAuthError('Backend unavailable');
-        console.error(error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    login();
-  }, []);
-
-  const logout = useCallback(() => {
-    sessionStorage.removeItem('sgc_token');
-    setToken(null);
-    window.location.reload();
-  }, []);
-
-  const fetcher = useCallback(
-    async (url) => {
-      if (!token) return null;
-
-      const res = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.detail || `Request failed: ${res.status}`);
-      }
-
-      return res.json();
-    },
-    [token]
-  );
-
-  return { token, loading, authError, logout, fetcher };
-}
-
-function useSocket(enabled) {
-  const [events, setEvents] = useState([]);
-
-  useEffect(() => {
-    if (!enabled) return undefined;
-
-    let ws;
-
-    try {
-      ws = new WebSocket(WS_URL);
-    } catch {
-      return undefined;
-    }
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        setEvents((prev) => [data, ...prev].slice(0, 20));
-      } catch (error) {
-        console.error(error);
-      }
-    };
-
-    return () => {
-      if (ws && ws.readyState === WebSocket.OPEN) ws.close();
-    };
-  }, [enabled]);
-
-  return events;
-}
-
-function LoadingScreen() {
-  return (
-    <div className="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black flex items-center justify-center text-white">
-      <div className="text-center max-w-md px-6">
-        <div className="mx-auto mb-5 h-16 w-16 rounded-2xl border border-cyan-400/30 bg-cyan-400/10 flex items-center justify-center shadow-[0_0_60px_rgba(34,211,238,0.25)]">
-          <Loader2 className="w-8 h-8 animate-spin text-cyan-300" />
-        </div>
-        <h1 className="text-2xl font-semibold tracking-tight">Smart Garbage Chute</h1>
-        <p className="text-slate-400 mt-2">Initializing industrial monitoring console...</p>
-      </div>
-    </div>
-  );
-}
-
-function SectionHeader({ icon: Icon, title, subtitle, action }) {
-  return (
-    <div className="flex items-start justify-between gap-4 mb-4">
-      <div>
-        <div className="flex items-center gap-2">
-          <Icon className="w-5 h-5 text-cyan-300" />
-          <h2 className="text-lg sm:text-xl font-semibold text-white">{title}</h2>
-        </div>
-        {subtitle ? <p className="text-sm text-slate-400 mt-1">{subtitle}</p> : null}
-      </div>
-      {action}
-    </div>
-  );
-}
-
-function MetricCard({ icon: Icon, label, value, helper, tone = 'cyan' }) {
-  const tones = {
-    cyan: 'from-cyan-500/20 to-cyan-500/5 border-cyan-400/20',
-    violet: 'from-violet-500/20 to-violet-500/5 border-violet-400/20',
-    amber: 'from-amber-500/20 to-amber-500/5 border-amber-400/20',
-    rose: 'from-rose-500/20 to-rose-500/5 border-rose-400/20',
-    emerald: 'from-emerald-500/20 to-emerald-500/5 border-emerald-400/20',
-  };
-
-  return (
-    <div
-      className={cn(
-        'rounded-2xl border bg-gradient-to-br p-5 shadow-[0_10px_40px_rgba(0,0,0,0.25)] backdrop-blur',
-        tones[tone] || tones.cyan
-      )}
-    >
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm text-slate-400">{label}</p>
-          <div className="mt-2 text-3xl font-semibold tracking-tight text-white">{value}</div>
-          {helper ? <p className="mt-2 text-xs text-slate-500">{helper}</p> : null}
-        </div>
-        <div className="h-12 w-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
-          <Icon className="w-6 h-6 text-white" />
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function Badge({ children, className }) {
@@ -236,7 +53,36 @@ function Badge({ children, className }) {
   );
 }
 
-function AlertItem({ alert, onAck }) {
+function MetricCard({ icon: Icon, label, value, helper, tone = 'cyan' }) {
+  const tones = {
+    cyan: 'from-cyan-500/20 to-cyan-500/5 border-cyan-400/20',
+    amber: 'from-amber-500/20 to-amber-500/5 border-amber-400/20',
+    rose: 'from-rose-500/20 to-rose-500/5 border-rose-400/20',
+    emerald: 'from-emerald-500/20 to-emerald-500/5 border-emerald-400/20',
+  };
+
+  return (
+    <div
+      className={cn(
+        'rounded-3xl border bg-gradient-to-br p-5 shadow-[0_12px_36px_rgba(0,0,0,0.25)]',
+        tones[tone] || tones.cyan
+      )}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm text-slate-400">{label}</p>
+          <div className="mt-2 text-3xl font-semibold tracking-tight text-white">{value}</div>
+          <p className="mt-2 text-xs text-slate-500">{helper}</p>
+        </div>
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/5">
+          <Icon className="h-6 w-6 text-white" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AlertItem({ alert, onAck, canAck }) {
   const severityStyles = {
     critical: 'border-rose-500/40 bg-rose-500/10 text-rose-200',
     high: 'border-orange-500/40 bg-orange-500/10 text-orange-200',
@@ -245,620 +91,408 @@ function AlertItem({ alert, onAck }) {
     info: 'border-slate-500/40 bg-slate-500/10 text-slate-100',
   };
 
-  const roomRef = alert.room_code || alert.room_id || '--';
-
   return (
     <div className={cn('rounded-2xl border p-4', severityStyles[alert.severity] || severityStyles.medium)}>
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-2">
           <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4" />
-            <div className="font-semibold uppercase tracking-wide">{formatEventLabel(alert.category || 'alert')}</div>
-            <Badge className="border-white/15 text-white/80">{alert.severity || 'medium'}</Badge>
+            <AlertTriangle className="h-4 w-4" />
+            <div className="font-semibold uppercase tracking-wide">{formatEventLabel(alert.category)}</div>
+            <Badge className="border-white/15 text-white/80">{alert.severity}</Badge>
           </div>
-
-          <p className="text-sm text-white/85">{alert.message || 'No message provided'}</p>
-
-          <div className="flex flex-wrap items-center gap-3 text-xs text-white/60">
-            <span>Room: {roomRef}</span>
+          <p className="text-sm text-white/90">{alert.message}</p>
+          <div className="flex flex-wrap gap-3 text-xs text-white/60">
+            <span>Room: {alert.room_code || alert.room_id || '--'}</span>
             <span>Source: {alert.source || 'system'}</span>
-            <span>Time: {formatTime(alert.created_at || alert.timestamp)}</span>
+            <span>Time: {formatTime(alert.created_at)}</span>
           </div>
         </div>
 
         <div className="flex flex-col items-end gap-2">
           {alert.acknowledged ? (
             <Badge className="border-emerald-400/30 bg-emerald-500/10 text-emerald-200">ACKED</Badge>
-          ) : (
+          ) : canAck ? (
             <button
-              onClick={() => onAck?.(alert)}
+              onClick={() => onAck(alert)}
               className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white hover:bg-white/10"
             >
-              <CheckCircle2 className="w-4 h-4" />
+              <CheckCircle2 className="h-4 w-4" />
               Acknowledge
             </button>
+          ) : (
+            <Badge className="border-white/10 text-slate-300">VIEW ONLY</Badge>
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-function Row({ label, value }) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <span className="text-slate-500">{label}</span>
-      <span className="text-white text-right">{value}</span>
     </div>
   );
 }
 
 function DeviceCard({ device }) {
   const online = String(device.status || '').toLowerCase() === 'online';
-  const roomRef = device.room_code || device.room_id || '--';
-  const roomLabel = device.room_name ? `${roomRef} - ${device.room_name}` : roomRef;
-  const location =
-    device.building_code && device.floor_level
-      ? `${device.building_code} / Level ${device.floor_level}`
-      : '--';
-  const lastEvent = device.last_event_type
-    ? `${formatEventLabel(device.last_event_type)} @ ${formatTime(device.last_event_at)}`
-    : '--';
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5 shadow-[0_10px_30px_rgba(0,0,0,0.2)]">
+    <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-white font-semibold tracking-tight">{device.device_id || 'Unknown Device'}</h3>
-          <p className="text-slate-400 text-sm mt-1">{device.device_type || 'ESP32 PoE Node'}</p>
+          <h3 className="text-white font-semibold tracking-tight">{device.device_id}</h3>
+          <p className="mt-1 text-sm text-slate-400">{device.device_type}</p>
         </div>
-
-        <div
-          className={cn(
-            'h-3 w-3 rounded-full shadow-[0_0_20px_rgba(34,197,94,0.35)]',
-            online ? 'bg-emerald-400' : 'bg-rose-400 shadow-[0_0_20px_rgba(251,113,133,0.35)]'
-          )}
-        />
+        <div className={online ? 'h-3 w-3 rounded-full bg-emerald-400' : 'h-3 w-3 rounded-full bg-rose-400'} />
       </div>
 
-      <div className="mt-5 space-y-3 text-sm">
-        <Row label="Room" value={roomLabel} />
-        <Row label="Location" value={location} />
-        <Row label="Firmware" value={device.firmware_version || '--'} />
-        <Row label="Last Seen" value={formatTime(device.last_seen_at)} />
-        <Row label="Last Event" value={lastEvent} />
-        <Row label="Open Alerts" value={device.open_alert_count ?? 0} />
-        <Row
-          label="State"
-          value={
-            <span className={online ? 'text-emerald-300' : 'text-rose-300'}>
-              {device.status || 'unknown'}
-            </span>
-          }
-        />
+      <div className="mt-5 space-y-2 text-sm text-slate-300">
+        <div className="flex justify-between gap-3">
+          <span className="text-slate-500">Room</span>
+          <span>{device.room_name ? `${device.room_code} - ${device.room_name}` : device.room_code || '--'}</span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-slate-500">Location</span>
+          <span>{device.building_code && device.floor_level ? `${device.building_code} / Level ${device.floor_level}` : '--'}</span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-slate-500">Firmware</span>
+          <span>{device.firmware_version || '--'}</span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-slate-500">Last Seen</span>
+          <span>{formatTime(device.last_seen_at)}</span>
+        </div>
       </div>
     </div>
   );
 }
 
-function TimelineEvent({ item }) {
-  const label = item?.type || item?.event_type || item?.category || 'event';
-
+function TimelineEvent({ event }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-full bg-cyan-300" />
-          <span className="text-sm font-medium text-white">{formatEventLabel(label)}</span>
+          <span className="text-sm font-medium text-white">
+            {formatEventLabel(event.type || event.event_type || event.category)}
+          </span>
         </div>
-        <span className="text-xs text-slate-500">{formatTime(item?.timestamp || item?.created_at || item?.time)}</span>
+        <span className="text-xs text-slate-500">
+          {formatTime(event.timestamp || event.created_at)}
+        </span>
       </div>
-      <pre className="mt-2 overflow-auto rounded-lg bg-black/20 p-3 text-[11px] leading-5 text-cyan-200">
-        {JSON.stringify(item, null, 2)}
+      <pre className="mt-2 rounded-xl bg-black/25 p-3 text-[11px] leading-5 text-cyan-100">
+        {JSON.stringify(event, null, 2)}
       </pre>
     </div>
   );
 }
 
-export default function Page() {
-  const { token, loading, authError, logout, fetcher } = useFetcher();
-  const socketEvents = useSocket(Boolean(token));
-
-  const [simulationRunning, setSimulationRunning] = useState(false);
-  const [simulationRoom, setSimulationRoom] = useState('CHR_01');
-  const [simulationEvent, setSimulationEvent] = useState('blockage');
-  const [simMessage, setSimMessage] = useState('');
-
-  const { data: summary } = useSWR(token ? `${API_BASE}/analytics/summary` : null, fetcher, {
-    refreshInterval: 5000,
-  });
-
-  const { data: alerts } = useSWR(token ? `${API_BASE}/alerts` : null, fetcher, {
-    refreshInterval: 5000,
-  });
-
-  const { data: devices } = useSWR(token ? `${API_BASE}/devices` : null, fetcher, {
-    refreshInterval: 5000,
-  });
-
-  const { data: rooms } = useSWR(token ? `${API_BASE}/rooms` : null, fetcher, {
-    refreshInterval: 5000,
-  });
-
-  const deviceList = useMemo(() => (Array.isArray(devices) ? devices : []), [devices]);
-  const alertList = useMemo(() => (Array.isArray(alerts) ? alerts : []), [alerts]);
-  const inferredRooms = useMemo(() => {
-    const map = new Map();
-
-    for (const device of deviceList) {
-      if (device?.room_id) {
-        map.set(String(device.room_id), {
-          room_id: device.room_id,
-          room_code: device.room_code,
-          room_name: device.room_name,
-          building_code: device.building_code,
-          floor_level: device.floor_level,
-          open_alert_count: device.open_alert_count,
-          status: String(device.status || '').toLowerCase() === 'online' ? 'normal' : 'offline',
-        });
-      }
-    }
-
-    for (const alert of alertList) {
-      if (alert?.room_id && !map.has(String(alert.room_id))) {
-        map.set(String(alert.room_id), {
-          room_id: alert.room_id,
-          room_code: alert.room_code,
-          room_name: alert.room_name,
-          open_alert_count: alert.acknowledged ? 0 : 1,
-          status: alert.acknowledged ? 'normal' : 'attention',
-        });
-      }
-    }
-
-    return [...map.values()];
-  }, [deviceList, alertList]);
-
-  const roomList = useMemo(() => {
-    if (Array.isArray(rooms) && rooms.length > 0) return rooms;
-    return inferredRooms;
-  }, [rooms, inferredRooms]);
+function useSocket(token) {
+  const [events, setEvents] = useState([]);
 
   useEffect(() => {
-    if (roomList.length > 0) {
-      setSimulationRoom(String(roomList[0]?.room_code || roomList[0]?.room_id || 'CHR_01'));
-    }
-  }, [roomList]);
+    if (!token) return undefined;
 
-  const onAck = useCallback(
+    const wsUrl = `${WS_URL}${WS_URL.includes('?') ? '&' : '?'}token=${token}`;
+    let ws;
+
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch {
+      return undefined;
+    }
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        setEvents((previous) => [data, ...previous].slice(0, 16));
+      } catch (error) {
+        console.error(error);
+      }
+    };
+
+    return () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    };
+  }, [token]);
+
+  return events;
+}
+
+export default function MonitoringPage() {
+  const session = usePortalSession();
+  const socketEvents = useSocket(session.token);
+  const [statusMessage, setStatusMessage] = useState('');
+
+  const { data: summary, mutate: refreshSummary } = useSWR(
+    session.token ? apiUrl('/analytics/summary') : null,
+    session.fetcher,
+    { refreshInterval: 5000 }
+  );
+  const { data: alerts, mutate: refreshAlerts } = useSWR(
+    session.token ? apiUrl('/alerts') : null,
+    session.fetcher,
+    { refreshInterval: 5000 }
+  );
+  const { data: devices } = useSWR(
+    session.token ? apiUrl('/devices') : null,
+    session.fetcher,
+    { refreshInterval: 5000 }
+  );
+  const { data: rooms } = useSWR(
+    session.token ? apiUrl('/rooms') : null,
+    session.fetcher,
+    { refreshInterval: 5000 }
+  );
+
+  const alertList = useMemo(() => (Array.isArray(alerts) ? alerts : []), [alerts]);
+  const deviceList = useMemo(() => (Array.isArray(devices) ? devices : []), [devices]);
+  const roomList = useMemo(() => (Array.isArray(rooms) ? rooms : []), [rooms]);
+  const onlineDevices = deviceList.filter((device) => String(device.status).toLowerCase() === 'online').length;
+
+  const canAcknowledge = ACKNOWLEDGE_ROLES.has(session.user?.role);
+  const canSeeInjectionLink = SIMULATION_ROLES.has(session.user?.role);
+  const canSeeAdminLink = SYSTEM_ADMIN_ROLES.has(session.user?.role);
+
+  const acknowledgeAlert = useCallback(
     async (alert) => {
       try {
-        const res = await fetch(`${API_BASE}/alerts/${alert.id}/acknowledge`, {
+        await session.request(`/alerts/${alert.id}/acknowledge`, {
           method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+          body: {},
         });
-
-        if (!res.ok) throw new Error('Failed to acknowledge alert');
+        setStatusMessage(`Alert ${alert.id} acknowledged.`);
+        refreshAlerts();
+        refreshSummary();
       } catch (error) {
         console.error(error);
-        setSimMessage('Acknowledge action failed.');
+        setStatusMessage(error.message || 'Acknowledge action failed.');
       }
     },
-    [token]
+    [refreshAlerts, refreshSummary, session]
   );
 
-  const callSimulation = useCallback(
-    async (path, body) => {
-      setSimMessage('');
-      try {
-        const res = await fetch(`${API_BASE}/simulation${path}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: body ? JSON.stringify(body) : undefined,
-        });
+  if (session.loading) {
+    return <LoadingScreen label="Loading monitoring surface..." />;
+  }
 
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.detail || 'Simulation request failed');
-        }
-
-        if (data?.ok && path === '/start') setSimulationRunning(true);
-        if (data?.ok && path === '/stop') setSimulationRunning(false);
-        setSimMessage(data?.ok ? 'Simulation updated successfully.' : 'Simulation action sent.');
-        return data;
-      } catch (error) {
-        console.error(error);
-        setSimMessage(error.message || 'Simulation request failed.');
-        return null;
-      }
-    },
-    [token]
-  );
-
-  if (loading) return <LoadingScreen />;
-
-  if (!token) {
+  if (!session.token) {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
-        <div className="max-w-lg w-full rounded-3xl border border-white/10 bg-slate-950/80 p-8">
-          <div className="flex items-center gap-3">
-            <div className="h-12 w-12 rounded-2xl bg-cyan-500/10 border border-cyan-400/20 flex items-center justify-center">
-              <Wifi className="w-6 h-6 text-cyan-300" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-semibold">Smart Garbage Chute</h1>
-              <p className="text-slate-400 text-sm">Industrial Monitoring Dashboard</p>
-            </div>
-          </div>
-
-          <div className="mt-6 rounded-2xl border border-amber-400/20 bg-amber-500/10 p-4 text-amber-100 text-sm">
-            {authError || 'Login unavailable. Check backend and seeded user credentials.'}
-          </div>
-        </div>
-      </div>
+      <AuthForm
+        title="Realtime Monitoring Website"
+        subtitle="Operational surface for control-room staff monitoring live telemetry, alerts, device health, AI detections, and room status."
+        helper="This monitoring surface intentionally excludes node creation forms, user management, and simulation controls."
+        authError={session.authError}
+        onLogin={session.login}
+        accent="cyan"
+      />
     );
   }
 
-  const onlineDevices = deviceList.filter((device) => String(device?.status || '').toLowerCase() === 'online').length;
-
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(15,23,42,0.7),_rgba(2,6,23,1)_45%)] text-white">
-      <header className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/80 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4">
-          <div className="flex items-center gap-4">
-            <div className="h-12 w-12 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 flex items-center justify-center shadow-[0_0_50px_rgba(34,211,238,0.18)]">
-              <Building2 className="w-6 h-6 text-cyan-300" />
-            </div>
-            <div>
-              <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Smart Garbage Chute Control Room</h1>
-              <div className="flex flex-wrap items-center gap-2 mt-1 text-sm text-slate-400">
-                <span>Al Ghurair</span>
-                <span className="text-slate-600">|</span>
-                <span>Realtime Monitoring</span>
-                <span className="text-slate-600">|</span>
-                <span>Simulation Enabled</span>
+    <PortalShell
+      title="Smart Garbage Chute Monitoring"
+      subtitle="Live operational dashboard for control-room use."
+      section="Main Website"
+      currentPath="/"
+      session={session}
+    >
+      <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+        <div className="rounded-[32px] border border-white/10 bg-white/5 p-6 shadow-2xl shadow-black/20">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-2xl">
+              <div className="flex items-center gap-2 text-cyan-300">
+                <ShieldCheck className="h-5 w-5" />
+                <span className="text-xs font-semibold uppercase tracking-[0.24em]">
+                  Industrial Monitoring Surface
+                </span>
               </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <Badge className="border-emerald-400/20 bg-emerald-500/10 text-emerald-200">
-              <Wifi className="mr-1 h-3.5 w-3.5" />
-              Online
-            </Badge>
-            <button
-              onClick={logout}
-              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white hover:bg-white/10"
-            >
-              <LogOut className="w-4 h-4" />
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-7xl px-5 py-6 sm:py-8">
-        <div className="mb-6 grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
-          <div className="rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl shadow-black/20">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="max-w-2xl">
-                <div className="flex items-center gap-2 text-cyan-300">
-                  <ShieldCheck className="h-5 w-5" />
-                  <span className="text-xs font-semibold uppercase tracking-[0.24em]">
-                    Industrial IoT / AI Control Surface
-                  </span>
-                </div>
-                <h2 className="mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                  Multi-building chute monitoring with sensor telemetry, AI alerts, and OTA control.
-                </h2>
-                <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
-                  Central command view for chute-room nodes, RTSP camera analytics, alerts, maintenance, and simulation.
-                </p>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3">
-                  <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Live Rooms</div>
-                  <div className="mt-1 text-2xl font-semibold">{roomList.length}</div>
-                </div>
-                <div className="rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3">
-                  <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Online Devices</div>
-                  <div className="mt-1 text-2xl font-semibold">{onlineDevices}</div>
-                </div>
-              </div>
+              <h2 className="mt-4 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+                Live chute-room telemetry, alerts, AI events, and room coverage.
+              </h2>
+              <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">
+                This control-room surface is intentionally limited to current operational state. Admin workflows and node injection remain isolated in their own portals.
+              </p>
             </div>
 
-            <div className="mt-6 flex flex-wrap items-center gap-3">
-              <Badge className="border-cyan-400/20 bg-cyan-500/10 text-cyan-200">MQTT</Badge>
-              <Badge className="border-violet-400/20 bg-violet-500/10 text-violet-200">WebSocket</Badge>
+            <div className="flex flex-wrap gap-2">
+              <Badge className="border-cyan-400/20 bg-cyan-500/10 text-cyan-200">
+                <Wifi className="mr-1 h-3.5 w-3.5" />
+                Live
+              </Badge>
+              <Badge className="border-emerald-400/20 bg-emerald-500/10 text-emerald-200">MQTT</Badge>
               <Badge className="border-amber-400/20 bg-amber-500/10 text-amber-200">AI CCTV</Badge>
-              <Badge className="border-emerald-400/20 bg-emerald-500/10 text-emerald-200">Simulation</Badge>
+              <Badge className="border-violet-400/20 bg-violet-500/10 text-violet-200">WebSocket</Badge>
             </div>
           </div>
 
-          <div className="rounded-3xl border border-white/10 bg-slate-950/75 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">System Health</div>
-                <div className="mt-1 text-lg font-semibold text-white">Operational Snapshot</div>
-              </div>
-              <div className="rounded-xl border border-white/10 bg-white/5 p-2">
-                <RefreshCw className="h-4 w-4 text-cyan-300" />
-              </div>
-            </div>
-
-            <div className="mt-5 space-y-3">
-              <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                <span className="flex items-center gap-2 text-slate-300">
-                  <Camera className="h-4 w-4 text-cyan-300" />
-                  AI Events (24h)
-                </span>
-                <span className="font-semibold">{summary?.ai_events_24h || 0}</span>
-              </div>
-
-              <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                <span className="flex items-center gap-2 text-slate-300">
-                  <Radio className="h-4 w-4 text-violet-300" />
-                  OTA Jobs Active
-                </span>
-                <span className="font-semibold">{summary?.ota_jobs_active || 0}</span>
-              </div>
-
-              <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                <span className="flex items-center gap-2 text-slate-300">
-                  <AlertTriangle className="h-4 w-4 text-rose-300" />
-                  Open Alerts
-                </span>
-                <span className="font-semibold">{summary?.alerts_open || 0}</span>
-              </div>
-
-              <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                <span className="text-slate-300">Simulator State</span>
-                <Badge className={simulationRunning ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200' : 'border-white/10 text-slate-200'}>
-                  {simulationRunning ? 'running' : 'idle'}
-                </Badge>
-              </div>
-            </div>
-
-            {simMessage ? (
-              <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">
-                {simMessage}
-              </div>
+          <div className="mt-6 flex flex-wrap gap-3">
+            {canSeeAdminLink ? (
+              <a
+                href="/admin"
+                className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white hover:bg-white/10"
+              >
+                Open Admin Website
+              </a>
+            ) : null}
+            {canSeeInjectionLink ? (
+              <a
+                href="/injection"
+                className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white hover:bg-white/10"
+              >
+                Open Node Injection Website
+              </a>
             ) : null}
           </div>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-12">
-          <div className="space-y-6 xl:col-span-8">
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <MetricCard
-                icon={Building2}
-                label="Buildings"
-                value={summary?.buildings ?? 0}
-                helper="Connected buildings in the system"
-                tone="cyan"
-              />
-              <MetricCard
-                icon={Trash2}
-                label="Rooms"
-                value={summary?.rooms ?? 0}
-                helper="Chute rooms under monitoring"
-                tone="violet"
-              />
-              <MetricCard
-                icon={Cpu}
-                label="Devices"
-                value={summary?.devices ?? 0}
-                helper="ESP32 PoE controller nodes"
-                tone="amber"
-              />
-              <MetricCard
-                icon={AlertTriangle}
-                label="Open Alerts"
-                value={summary?.alerts_open ?? 0}
-                helper="Pending operations queue"
-                tone="rose"
-              />
+        <div className="rounded-[32px] border border-white/10 bg-slate-950/75 p-6">
+          <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Operational Snapshot</div>
+          <div className="mt-2 text-lg font-semibold text-white">Current system state</div>
+
+          <div className="mt-5 space-y-3">
+            <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+              <span className="flex items-center gap-2 text-slate-300">
+                <Camera className="h-4 w-4 text-cyan-300" />
+                AI Events (24h)
+              </span>
+              <span className="font-semibold">{summary?.ai_events_24h || 0}</span>
             </div>
-
-            <div className="rounded-3xl border border-white/10 bg-slate-950/75 p-5">
-              <SectionHeader
-                icon={BellRing}
-                title="Recent Alerts"
-                subtitle="Live operational events requiring attention."
-              />
-
-              <div className="space-y-4">
-                {alertList.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-8 text-center text-slate-400">
-                    No active alerts. The chute network is stable.
-                  </div>
-                ) : (
-                  alertList.slice(0, 8).map((alert) => <AlertItem key={alert.id} alert={alert} onAck={onAck} />)
-                )}
-              </div>
+            <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+              <span className="flex items-center gap-2 text-slate-300">
+                <Radio className="h-4 w-4 text-violet-300" />
+                OTA Jobs Active
+              </span>
+              <span className="font-semibold">{summary?.ota_jobs_active || 0}</span>
             </div>
-
-            <div className="rounded-3xl border border-white/10 bg-slate-950/75 p-5">
-              <SectionHeader
-                icon={Server}
-                title="Device Monitoring"
-                subtitle="Independent PoE nodes by room with live status and firmware visibility."
-              />
-
-              <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-                {deviceList.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-8 text-center text-slate-400 md:col-span-2 2xl:col-span-3">
-                    No devices discovered yet.
-                  </div>
-                ) : (
-                  deviceList.map((device) => <DeviceCard key={device.id || device.device_id} device={device} />)
-                )}
-              </div>
+            <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+              <span className="flex items-center gap-2 text-slate-300">
+                <AlertTriangle className="h-4 w-4 text-rose-300" />
+                Open Alerts
+              </span>
+              <span className="font-semibold">{summary?.alerts_open || 0}</span>
+            </div>
+            <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+              <span className="text-slate-300">Online Devices</span>
+              <span className="font-semibold">{onlineDevices}</span>
             </div>
           </div>
 
-          <div className="space-y-6 xl:col-span-4">
-            <div className="rounded-3xl border border-white/10 bg-slate-950/75 p-5">
-              <SectionHeader
-                icon={Activity}
-                title="Live WebSocket Feed"
-                subtitle="Realtime telemetry, AI events, and alert updates."
-              />
-
-              <div className="max-h-[420px] space-y-3 overflow-auto pr-1">
-                {socketEvents.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-6 text-sm text-slate-400">
-                    Waiting for realtime events...
-                  </div>
-                ) : (
-                  socketEvents.map((item, index) => <TimelineEvent key={index} item={item} />)
-                )}
-              </div>
+          {statusMessage ? (
+            <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">
+              {statusMessage}
             </div>
+          ) : null}
+        </div>
+      </div>
 
-            <div className="rounded-3xl border border-white/10 bg-slate-950/75 p-5">
-              <SectionHeader
-                icon={TriangleAlert}
-                title="Demo / Simulation Controls"
-                subtitle="Use this panel when hardware is unavailable."
-              />
-
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => callSimulation('/start')}
-                    className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100 hover:bg-emerald-500/15"
-                  >
-                    <PlayCircle className="h-4 w-4" />
-                    Start
-                  </button>
-                  <button
-                    onClick={() => callSimulation('/stop')}
-                    className="inline-flex items-center justify-center gap-2 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100 hover:bg-rose-500/15"
-                  >
-                    <Square className="h-4 w-4" />
-                    Stop
-                  </button>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs uppercase tracking-[0.22em] text-slate-500">Room Code</label>
-                  {roomList.length > 0 ? (
-                    <select
-                      value={simulationRoom}
-                      onChange={(event) => setSimulationRoom(event.target.value)}
-                      className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none focus:border-cyan-400/40"
-                    >
-                      {roomList.map((room) => (
-                        <option
-                          key={room.id || room.room_id || room.room_code}
-                          value={room.room_code || room.room_id}
-                        >
-                          {(room.room_code || room.room_id || 'Room') + (room.name ? ` - ${room.name}` : '')}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      value={simulationRoom}
-                      onChange={(event) => setSimulationRoom(event.target.value)}
-                      className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400/40"
-                      placeholder="CHR_01"
-                    />
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs uppercase tracking-[0.22em] text-slate-500">Event Type</label>
-                  <select
-                    value={simulationEvent}
-                    onChange={(event) => setSimulationEvent(event.target.value)}
-                    className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none focus:border-cyan-400/40"
-                  >
-                    <option value="heartbeat">Heartbeat</option>
-                    <option value="door_open">Door Open</option>
-                    <option value="door_prolonged_open">Prolonged Door Open</option>
-                    <option value="blockage">Blockage</option>
-                    <option value="overflow">Overflow</option>
-                    <option value="leak">Leak</option>
-                    <option value="motion">Motion</option>
-                    <option value="garbage_left">Garbage Left</option>
-                    <option value="misuse">Misuse</option>
-                  </select>
-                </div>
-
-                <button
-                  onClick={() =>
-                    callSimulation('/emit', {
-                      room_code: simulationRoom,
-                      event_type: simulationEvent,
-                      severity: ['blockage', 'overflow', 'leak', 'misuse', 'door_prolonged_open', 'garbage_left'].includes(simulationEvent)
-                        ? 'high'
-                        : simulationEvent === 'heartbeat'
-                          ? 'info'
-                          : 'medium',
-                    })
-                  }
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-cyan-400/20 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100 hover:bg-cyan-500/15"
-                >
-                  <Send className="h-4 w-4" />
-                  Inject False Input
-                </button>
-
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-xs text-slate-400">
-                  Simulation mode allows full dashboard validation without physical sensors or cameras.
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-3xl border border-white/10 bg-slate-950/75 p-5">
-              <SectionHeader
-                icon={MapPinned}
-                title="Room Coverage"
-                subtitle="Seeded chute rooms with live device and alert awareness."
-              />
-
-              <div className="space-y-3">
-                {roomList.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-6 text-center text-slate-400">
-                    No rooms detected.
-                  </div>
-                ) : (
-                  roomList.slice(0, 6).map((room, index) => (
-                    <div
-                      key={`${room.id || room.room_id || room.room_code}-${index}`}
-                      className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3"
-                    >
-                      <div>
-                        <div className="font-medium text-white">{room.room_code || room.room_id || 'Unknown Room'}</div>
-                        <div className="text-xs text-slate-500">
-                          {room.name || 'Chute room'}
-                          {room.building_code && room.floor_level ? ` | ${room.building_code} / Level ${room.floor_level}` : ''}
-                        </div>
-                      </div>
-                      <Badge className={roomStatusStyles(room.status)}>
-                        {formatEventLabel(room.status || 'normal')}
-                        {room.open_alert_count ? ` (${room.open_alert_count})` : ''}
-                      </Badge>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
+      <div className="mt-6 grid gap-6 xl:grid-cols-12">
+        <div className="space-y-6 xl:col-span-8">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard icon={Building2} label="Buildings" value={summary?.buildings ?? 0} helper="Active buildings" tone="cyan" />
+            <MetricCard icon={Trash2} label="Rooms" value={summary?.rooms ?? 0} helper="Room-aware monitoring" tone="amber" />
+            <MetricCard icon={Cpu} label="Devices" value={summary?.devices ?? 0} helper="ESP32 PoE nodes" tone="emerald" />
+            <MetricCard icon={AlertTriangle} label="Open Alerts" value={summary?.alerts_open ?? 0} helper="Pending response queue" tone="rose" />
           </div>
+
+          <section className="rounded-[32px] border border-white/10 bg-slate-950/75 p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <BellRing className="h-5 w-5 text-cyan-300" />
+              <div>
+                <h3 className="text-lg font-semibold text-white">Recent Alerts</h3>
+                <p className="text-sm text-slate-400">Live alert stream requiring operational attention.</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {alertList.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-8 text-center text-slate-400">
+                  No active alerts. The chute network is stable.
+                </div>
+              ) : (
+                alertList.slice(0, 8).map((alert) => (
+                  <AlertItem
+                    key={alert.id}
+                    alert={alert}
+                    onAck={acknowledgeAlert}
+                    canAck={canAcknowledge}
+                  />
+                ))
+              )}
+            </div>
+          </section>
+
+          <section className="rounded-[32px] border border-white/10 bg-slate-950/75 p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <Server className="h-5 w-5 text-cyan-300" />
+              <div>
+                <h3 className="text-lg font-semibold text-white">Device Monitoring</h3>
+                <p className="text-sm text-slate-400">Live PoE controller visibility by room.</p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+              {deviceList.map((device) => (
+                <DeviceCard key={device.id || device.device_id} device={device} />
+              ))}
+            </div>
+          </section>
         </div>
 
-        <footer className="mt-8 flex items-center justify-center gap-2 py-4 text-sm text-slate-500">
-          <Clock3 className="h-4 w-4" />
-          <span>Industrial dashboard operating in realtime monitoring mode.</span>
-        </footer>
-      </main>
-    </div>
+        <div className="space-y-6 xl:col-span-4">
+          <section className="rounded-[32px] border border-white/10 bg-slate-950/75 p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <Activity className="h-5 w-5 text-cyan-300" />
+              <div>
+                <h3 className="text-lg font-semibold text-white">Live WebSocket Feed</h3>
+                <p className="text-sm text-slate-400">Realtime telemetry, AI detections, and alert broadcasts.</p>
+              </div>
+            </div>
+
+            <div className="max-h-[420px] space-y-3 overflow-auto pr-1">
+              {socketEvents.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-6 text-sm text-slate-400">
+                  Waiting for realtime events...
+                </div>
+              ) : (
+                socketEvents.map((event, index) => <TimelineEvent key={index} event={event} />)
+              )}
+            </div>
+          </section>
+
+          <section className="rounded-[32px] border border-white/10 bg-slate-950/75 p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <Building2 className="h-5 w-5 text-cyan-300" />
+              <div>
+                <h3 className="text-lg font-semibold text-white">Room Coverage</h3>
+                <p className="text-sm text-slate-400">Live room state and open alert count.</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {roomList.slice(0, 10).map((room) => (
+                <div
+                  key={room.id || room.room_code}
+                  className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3"
+                >
+                  <div>
+                    <div className="font-medium text-white">{room.room_code || room.id}</div>
+                    <div className="text-xs text-slate-500">
+                      {room.name || 'Chute room'}
+                      {room.building_code && room.floor_level
+                        ? ` | ${room.building_code} / Level ${room.floor_level}`
+                        : ''}
+                    </div>
+                  </div>
+                  <Badge className="border-white/10 text-slate-200">
+                    {formatEventLabel(room.status || 'normal')}
+                    {room.open_alert_count ? ` (${room.open_alert_count})` : ''}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      </div>
+    </PortalShell>
   );
 }

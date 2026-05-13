@@ -5,9 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from sqlalchemy.orm import selectinload
 from app.db.session import get_db
+from app.core.rbac import MONITORING_ROLES
 from app.models import SensorEvent, AiEvent, MaintenanceLog, Room
+from app.models import User
 from app.schemas import SensorEventOut, AiEventOut, MaintenanceLogOut, AiEventCreate
-from app.api.deps import get_current_user
+from app.api.deps import require_roles
 from app.services.alert_engine import alert_engine
 from app.services.broadcaster import broadcaster
 
@@ -18,7 +20,7 @@ async def list_events(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    user=Depends(get_current_user)
+    user: User = Depends(require_roles(*MONITORING_ROLES)),
 ):
     """List recent sensor and AI events."""
     sensor = (await db.execute(
@@ -46,7 +48,7 @@ async def list_sensor_events(
     event_type: str | None = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
-    user=Depends(get_current_user)
+    user: User = Depends(require_roles(*MONITORING_ROLES)),
 ):
     """List sensor events with optional filtering."""
     query = select(SensorEvent).order_by(desc(SensorEvent.id))
@@ -66,7 +68,7 @@ async def list_ai_events(
     event_type: str | None = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
-    user=Depends(get_current_user)
+    user: User = Depends(require_roles(*MONITORING_ROLES)),
 ):
     """List AI detection events with optional filtering."""
     query = select(AiEvent).order_by(desc(AiEvent.id))
@@ -158,7 +160,7 @@ async def list_maintenance(
     status: str | None = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
-    user=Depends(get_current_user)
+    user: User = Depends(require_roles(*MONITORING_ROLES)),
 ):
     """List maintenance logs with optional filtering."""
     query = select(MaintenanceLog).order_by(desc(MaintenanceLog.id))

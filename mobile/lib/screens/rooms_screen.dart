@@ -99,12 +99,12 @@ class _RoomsScreenState extends State<RoomsScreen> {
                       Text(room.locationLabel),
                       const SizedBox(height: 4),
                       Text(
-                        'Devices ${room.onlineDevices}/${room.devicesCount} • Alerts ${room.openAlertCount}',
+                        'Devices ${room.onlineDevices}/${room.devicesCount} | Alerts ${room.openAlertCount}',
                       ),
                       Text(
                         room.lastEventAt == null
                             ? 'Last event: --'
-                            : 'Last event: ${room.lastEventType ?? '--'} • ${timeago.format(room.lastEventAt!)}',
+                            : 'Last event: ${room.lastEventType ?? '--'} | ${timeago.format(room.lastEventAt!)}',
                       ),
                     ],
                   ),

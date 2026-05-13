@@ -70,12 +70,14 @@ class ControlRoomAdapter(BaseNotificationAdapter):
     
     async def send(self, recipient: str, title: str, body: str, meta: dict = None) -> bool:
         logger.info("control_room.send", extra={"title": title})
+        payload = meta or {}
         # Broadcast to all connected WebSocket clients
         await broadcaster.publish("alerts", {
             "type": "notification",
             "title": title,
             "body": body,
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **payload,
         })
         return True
 
@@ -156,7 +158,15 @@ class NotificationService:
         """Send alert notification through multiple channels."""
         if channels is None:
             # Default channels based on severity
-            if severity == "high":
+            if severity == "critical":
+                channels = [
+                    NotificationChannel.CONTROL_ROOM.value,
+                    NotificationChannel.WHATSAPP.value,
+                    NotificationChannel.SMS.value,
+                    NotificationChannel.EMAIL.value,
+                    NotificationChannel.BMS.value,
+                ]
+            elif severity == "high":
                 channels = [
                     NotificationChannel.CONTROL_ROOM.value,
                     NotificationChannel.WHATSAPP.value,

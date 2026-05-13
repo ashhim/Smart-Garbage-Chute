@@ -3,6 +3,7 @@ from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.config import get_settings
+from app.core.rbac import normalize_role
 from app.db.session import get_db
 from app.models import User
 
@@ -20,4 +21,21 @@ async def get_current_user(authorization: str | None = Header(default=None), db:
     user = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="User account is inactive")
+    user.role = normalize_role(user.role)
     return user
+
+
+def require_roles(*roles: str):
+    expected = {normalize_role(role) for role in roles}
+
+    async def dependency(user: User = Depends(get_current_user)) -> User:
+        if normalize_role(user.role) not in expected:
+            raise HTTPException(
+                status_code=403,
+                detail="Insufficient privileges for this resource",
+            )
+        return user
+
+    return dependency

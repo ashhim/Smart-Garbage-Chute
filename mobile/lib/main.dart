@@ -13,13 +13,14 @@ Future<void> main() async {
   await NotificationService.instance.initialize();
 
   final apiService = ApiService();
+  await apiService.initialize();
   final authService = AuthService(apiService: apiService);
   await authService.initialize();
 
   runApp(
     MultiProvider(
       providers: [
-        Provider<ApiService>.value(value: apiService),
+        ChangeNotifierProvider<ApiService>.value(value: apiService),
         ChangeNotifierProvider<AuthService>.value(value: authService),
       ],
       child: const SmartGarbageApp(),

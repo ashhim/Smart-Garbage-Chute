@@ -8,6 +8,7 @@ import 'package:timeago/timeago.dart' as timeago;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/alert.dart';
+import '../models/user.dart';
 import '../models/room.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
@@ -47,6 +48,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Alert> _recentAlerts = const [];
   List<Room> _rooms = const [];
   final List<Map<String, dynamic>> _realtimeEvents = [];
+  Map<String, dynamic>? _urgentEvent;
 
   @override
   void initState() {
@@ -59,6 +61,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void dispose() {
     _wsSubscription?.cancel();
     _wsChannel?.sink.close();
+    NotificationService.instance.stopUrgentSiren();
     super.dispose();
   }
 
@@ -91,6 +94,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     final type = payload['type']?.toString() ?? 'event';
+    final severity = (payload['severity'] ?? 'info').toString().toLowerCase();
+    final urgent = severity == 'high' || severity == 'critical';
+
     setState(() {
       _realtimeEvents.insert(0, payload);
       if (_realtimeEvents.length > 12) {
@@ -102,12 +108,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
       } else if (type == 'alert.acknowledged') {
         _activeAlerts = max(0, _activeAlerts - 1);
       }
+
+      if (urgent) {
+        _urgentEvent = payload;
+      }
     });
 
     if (type == 'alert.created' || type == 'notification') {
       final title = type == 'notification'
           ? (payload['title']?.toString() ?? 'Control room notification')
-          : 'New alert';
+          : 'New ${severity.toUpperCase()} alert';
       final body = payload['message']?.toString() ??
           payload['body']?.toString() ??
           'Realtime event received';
@@ -115,10 +125,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       NotificationService.instance.showRealtimeAlert(
         title: title,
         body: body,
+        severity: severity,
+        playSiren: urgent,
       );
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(body)),
+        SnackBar(
+          backgroundColor: urgent ? Colors.red.shade700 : null,
+          content: Text(body),
+        ),
       );
     }
   }
@@ -130,8 +145,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         await apiService.get('/analytics/summary'),
       );
       final roomPayload = apiService.expectList(await apiService.get('/rooms'));
-      final alertPayload =
-          apiService.expectList(await apiService.get('/alerts'));
+      final alertPayload = apiService.expectList(await apiService.get('/alerts'));
 
       if (!mounted) {
         return;
@@ -207,8 +221,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _dismissUrgentBanner() async {
+    await NotificationService.instance.stopUrgentSiren();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _urgentEvent = null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final authService = context.watch<AuthService>();
+    final currentUser = authService.currentUser;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Smart Garbage Chute'),
@@ -216,11 +243,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
           PopupMenuButton<String>(
             onSelected: (value) async {
               if (value == 'logout') {
-                await context.read<AuthService>().logout();
+                await NotificationService.instance.stopUrgentSiren();
+                await authService.logout();
               }
             },
-            itemBuilder: (context) => const [
+            itemBuilder: (context) => [
               PopupMenuItem<String>(
+                enabled: false,
+                value: 'role',
+                child: Text(currentUser?.roleLabel ?? 'Authenticated User'),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem<String>(
                 value: 'logout',
                 child: Text('Logout'),
               ),
@@ -231,7 +265,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       body: IndexedStack(
         index: _selectedIndex,
         children: [
-          _buildOverviewTab(),
+          _buildOverviewTab(currentUser),
           const RoomsScreen(),
           const AlertsScreen(),
           const DevicesScreen(),
@@ -267,7 +301,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildOverviewTab() {
+  Widget _buildOverviewTab(AppUser? currentUser) {
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -278,6 +312,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(16),
         children: [
+          if (_urgentEvent != null) ...[
+            _buildUrgentBanner(),
+            const SizedBox(height: 16),
+          ],
+          _buildUserBanner(currentUser),
+          const SizedBox(height: 16),
           GridView.count(
             crossAxisCount: 2,
             mainAxisSpacing: 12,
@@ -344,108 +384,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ],
                   ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Simulation Controls',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<String>(
-                    value: _selectedRoomCode,
-                    items: _rooms
-                        .map(
-                          (room) => DropdownMenuItem<String>(
-                            value: room.roomCode,
-                            child: Text('${room.roomCode} - ${room.name}'),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) {
-                      setState(() => _selectedRoomCode = value);
-                    },
-                    decoration: const InputDecoration(
-                      labelText: 'Room',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    value: _simulationEvent,
-                    items: const [
-                      'heartbeat',
-                      'door_open',
-                      'door_prolonged_open',
-                      'blockage',
-                      'overflow',
-                      'leak',
-                      'motion',
-                      'garbage_left',
-                      'misuse',
-                    ]
-                        .map(
-                          (event) => DropdownMenuItem<String>(
-                            value: event,
-                            child: Text(event.replaceAll('_', ' ')),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) {
-                      if (value != null) {
-                        setState(() => _simulationEvent = value);
-                      }
-                    },
-                    decoration: const InputDecoration(
-                      labelText: 'Event Type',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: [
-                      FilledButton.icon(
-                        onPressed: _simulationBusy
-                            ? null
-                            : () => _callSimulation('/simulation/start'),
-                        icon: const Icon(Icons.play_arrow_rounded),
-                        label: const Text('Start'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _simulationBusy
-                            ? null
-                            : () => _callSimulation('/simulation/stop'),
-                        icon: const Icon(Icons.stop_circle_outlined),
-                        label: const Text('Stop'),
-                      ),
-                      FilledButton.tonalIcon(
-                        onPressed: _simulationBusy || _selectedRoomCode == null
-                            ? null
-                            : () => _callSimulation(
-                                  '/simulation/emit',
-                                  {
-                                    'room_code': _selectedRoomCode,
-                                    'event_type': _simulationEvent,
-                                    'severity': _simulationSeverityFor(
-                                      _simulationEvent,
-                                    ),
-                                  },
-                                ),
-                        icon: const Icon(Icons.send_outlined),
-                        label: const Text('Inject Event'),
-                      ),
-                    ],
-                  ),
                   if (_statusMessage != null) ...[
                     const SizedBox(height: 12),
                     Text(
@@ -457,78 +395,276 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
           ),
+          if (currentUser?.canUseSimulation ?? false) ...[
+            const SizedBox(height: 16),
+            _buildSimulationCard(),
+          ],
           const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Recent Alerts',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 12),
-                  if (_recentAlerts.isEmpty)
-                    const Text('No recent alerts.')
-                  else
-                    ..._recentAlerts.map(
-                      (alert) => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(
-                          alert.severityIcon,
-                          color: alert.severityColor,
-                        ),
-                        title: Text(alert.message),
-                        subtitle: Text(
-                          '${alert.roomLabel} • ${timeago.format(alert.createdAt)}',
-                        ),
-                        trailing: alert.acknowledged
-                            ? const Icon(Icons.check_circle,
-                                color: Colors.green)
-                            : Text(alert.severity.toUpperCase()),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
+          _buildRecentAlertsCard(),
           const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Realtime Feed',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 12),
-                  if (_realtimeEvents.isEmpty)
-                    const Text('Waiting for websocket events...')
-                  else
-                    ..._realtimeEvents.map(
-                      (event) => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        dense: true,
-                        title: Text(
-                          (event['type'] ?? event['event_type'] ?? 'event')
-                              .toString()
-                              .replaceAll('_', ' '),
-                        ),
-                        subtitle: Text(
-                          jsonEncode(event),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
+          _buildRealtimeFeedCard(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildUrgentBanner() {
+    final body = _urgentEvent?['message']?.toString() ??
+        _urgentEvent?['body']?.toString() ??
+        'Urgent alert received.';
+    final severity = (_urgentEvent?['severity'] ?? 'high').toString().toUpperCase();
+    final roomCode = _urgentEvent?['room_code']?.toString();
+
+    return Card(
+      color: Colors.red.shade50,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.warning_amber_rounded, color: Colors.red.shade700),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Urgent Alert - $severity',
+                    style: TextStyle(
+                      color: Colors.red.shade900,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: _dismissUrgentBanner,
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              body,
+              style: TextStyle(color: Colors.red.shade900),
+            ),
+            if (roomCode != null && roomCode.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Room: $roomCode',
+                style: TextStyle(color: Colors.red.shade800),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUserBanner(AppUser? currentUser) {
+    final apiService = context.watch<ApiService>();
+    final name = currentUser?.fullName.isNotEmpty == true
+        ? currentUser!.fullName
+        : currentUser?.email ?? 'Authenticated user';
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Signed in as $name',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                Chip(label: Text(currentUser?.roleLabel ?? 'Viewer')),
+                Chip(label: Text('API: ${apiService.apiBaseUrl}')),
+                if (currentUser?.readOnly ?? false)
+                  const Chip(label: Text('Read-only access')),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSimulationCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Simulation Controls',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              value: _selectedRoomCode,
+              items: _rooms
+                  .map(
+                    (room) => DropdownMenuItem<String>(
+                      value: room.roomCode,
+                      child: Text('${room.roomCode} - ${room.name}'),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                setState(() => _selectedRoomCode = value);
+              },
+              decoration: const InputDecoration(
+                labelText: 'Room',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _simulationEvent,
+              items: const [
+                'heartbeat',
+                'door_open',
+                'door_prolonged_open',
+                'blockage',
+                'overflow',
+                'leak',
+                'motion',
+                'garbage_left',
+                'misuse',
+              ]
+                  .map(
+                    (event) => DropdownMenuItem<String>(
+                      value: event,
+                      child: Text(event.replaceAll('_', ' ')),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() => _simulationEvent = value);
+                }
+              },
+              decoration: const InputDecoration(
+                labelText: 'Event Type',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                FilledButton.icon(
+                  onPressed: _simulationBusy
+                      ? null
+                      : () => _callSimulation('/simulation/start'),
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  label: const Text('Start'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _simulationBusy
+                      ? null
+                      : () => _callSimulation('/simulation/stop'),
+                  icon: const Icon(Icons.stop_circle_outlined),
+                  label: const Text('Stop'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: _simulationBusy || _selectedRoomCode == null
+                      ? null
+                      : () => _callSimulation(
+                            '/simulation/emit',
+                            {
+                              'room_code': _selectedRoomCode,
+                              'event_type': _simulationEvent,
+                              'severity':
+                                  _simulationSeverityFor(_simulationEvent),
+                            },
+                          ),
+                  icon: const Icon(Icons.send_outlined),
+                  label: const Text('Inject Event'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRecentAlertsCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Recent Alerts',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 12),
+            if (_recentAlerts.isEmpty)
+              const Text('No recent alerts.')
+            else
+              ..._recentAlerts.map(
+                (alert) => ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    alert.severityIcon,
+                    color: alert.severityColor,
+                  ),
+                  title: Text(alert.message),
+                  subtitle: Text(
+                    '${alert.roomLabel} | ${timeago.format(alert.createdAt)}',
+                  ),
+                  trailing: alert.acknowledged
+                      ? const Icon(Icons.check_circle, color: Colors.green)
+                      : Text(alert.severity.toUpperCase()),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRealtimeFeedCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Realtime Feed',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 12),
+            if (_realtimeEvents.isEmpty)
+              const Text('Waiting for websocket events...')
+            else
+              ..._realtimeEvents.map(
+                (event) => ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: Text(
+                    (event['type'] ?? event['event_type'] ?? 'event')
+                        .toString()
+                        .replaceAll('_', ' '),
+                  ),
+                  subtitle: Text(
+                    jsonEncode(event),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

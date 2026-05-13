@@ -126,9 +126,10 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.videocam_outlined),
                                 title: Text(
-                                    '${event.roomCode} • ${event.eventType}'),
+                                  '${event.roomCode} | ${event.eventType}',
+                                ),
                                 subtitle: Text(
-                                  'Confidence ${event.confidence.toStringAsFixed(2)} • ${timeago.format(event.createdAt)}',
+                                  'Confidence ${event.confidence.toStringAsFixed(2)} | ${timeago.format(event.createdAt)}',
                                 ),
                               ),
                             ),
@@ -156,9 +157,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                             contentPadding: EdgeInsets.zero,
                             leading:
                                 const Icon(Icons.system_update_alt_outlined),
-                            title: Text('${job.targetType} • ${job.targetRef}'),
+                            title: Text('${job.targetType} | ${job.targetRef}'),
                             subtitle: Text(
-                              '${job.firmwareVersion} • ${job.status} • ${job.progress}%',
+                              '${job.firmwareVersion} | ${job.status} | ${job.progress}%',
                             ),
                           ),
                         ),
@@ -185,7 +186,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                           (log) => ListTile(
                             contentPadding: EdgeInsets.zero,
                             leading: const Icon(Icons.build_circle_outlined),
-                            title: Text('Room ${log.roomId} • ${log.status}'),
+                            title: Text('Room ${log.roomId} | ${log.status}'),
                             subtitle: Text(
                               '${log.issue}\n${log.notes ?? ''}'.trim(),
                             ),

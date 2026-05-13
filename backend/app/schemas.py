@@ -27,6 +27,26 @@ class UserOut(BaseModel):
     is_active: bool
 
 
+class UserCreate(BaseModel):
+    email: str
+    full_name: str
+    password: str = Field(min_length=8)
+    role: str = "viewer"
+    is_active: bool = True
+
+
+class UserUpdate(BaseModel):
+    full_name: str | None = None
+    password: str | None = Field(default=None, min_length=8)
+    role: str | None = None
+    is_active: bool | None = None
+
+
+class RoleOptionOut(BaseModel):
+    value: str
+    label: str
+
+
 # =========================
 # BUILDINGS
 # =========================
@@ -40,6 +60,11 @@ class BuildingOut(BuildingCreate):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+
+
+class BuildingUpdate(BaseModel):
+    code: str | None = None
+    name: str | None = None
 
 
 # =========================
@@ -56,6 +81,12 @@ class FloorOut(FloorCreate):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+
+
+class FloorUpdate(BaseModel):
+    building_id: int | None = None
+    level: int | None = None
+    name: str | None = None
 
 
 # =========================
@@ -86,6 +117,13 @@ class RoomOut(RoomCreate):
     status: str = "normal"
 
 
+class RoomUpdate(BaseModel):
+    floor_id: int | None = None
+    room_code: str | None = None
+    name: str | None = None
+    zone: str | None = None
+
+
 # =========================
 # DEVICES
 # =========================
@@ -114,6 +152,14 @@ class DeviceOut(DeviceCreate):
     last_event_at: datetime | None = None
 
 
+class DeviceUpdate(BaseModel):
+    room_id: int | None = None
+    device_id: str | None = None
+    device_type: str | None = None
+    firmware_version: str | None = None
+    status: str | None = None
+
+
 # =========================
 # ALERTS
 # =========================
@@ -139,7 +185,7 @@ class AlertOut(BaseModel):
 
 
 class AcknowledgeRequest(BaseModel):
-    actor: str = "control-room"
+    actor: str | None = None
 
 
 # =========================
@@ -149,12 +195,12 @@ class AcknowledgeRequest(BaseModel):
 class OtaJobCreate(BaseModel):
     target_type: str = Field(
         default="room",
-        pattern="^(room|building|device)$"
+        pattern="^(room|floor|building|device|all)$"
     )
 
     target_ref: str
     firmware_version: str
-    requested_by: str = "admin"
+    requested_by: str | None = None
 
 
 class OtaJobOut(BaseModel):
@@ -167,6 +213,28 @@ class OtaJobOut(BaseModel):
     status: str
     progress: int
     requested_by: str
+    created_at: datetime
+
+
+class FirmwareVersionCreate(BaseModel):
+    version: str
+    build_sha: str = "unknown"
+    artifact_url: str
+    notes: str | None = None
+    signature: str | None = None
+    is_active: bool = False
+
+
+class FirmwareVersionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    version: str
+    build_sha: str
+    artifact_url: str
+    notes: str | None = None
+    signature: str | None = None
+    is_active: bool
     created_at: datetime
 
 
@@ -231,6 +299,7 @@ class SensorEventOut(BaseModel):
 class SimulationEmitRequest(BaseModel):
     room_id: int | None = None
     room_code: str | None = None
+    device_id: str | None = None
     event_type: str
     severity: str | None = None
     source: str = "simulation"
@@ -267,3 +336,55 @@ class NotificationOut(BaseModel):
     body: str
     status: str
     created_at: datetime
+
+
+class AuditLogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    actor: str
+    action: str
+    entity_type: str
+    entity_id: str
+    payload: dict
+    created_at: datetime
+
+
+class SimulationNodeCreate(BaseModel):
+    node_id: str
+    room_id: int | None = None
+    room_code: str | None = None
+    label: str | None = None
+    sensor_types: list[str] = Field(default_factory=list)
+    notes: str | None = None
+
+
+class SimulationNodeRegisterRequest(BaseModel):
+    room_id: int | None = None
+    room_code: str | None = None
+    device_type: str = "esp32-s3-poe-sim"
+    firmware_version: str = "1.2.1"
+
+
+class SimulationNodeEmitRequest(BaseModel):
+    event_type: str
+    severity: str | None = None
+    confidence: float | None = None
+    payload: dict = Field(default_factory=dict)
+
+
+class SimulationNodeOut(BaseModel):
+    id: int
+    node_id: str
+    label: str
+    room_id: int | None = None
+    room_code: str | None = None
+    room_name: str | None = None
+    sensor_types: list[str] = Field(default_factory=list)
+    status: str
+    linked_device_id: int | None = None
+    linked_device_identifier: str | None = None
+    notes: str | None = None
+    last_event_type: str | None = None
+    created_at: datetime
+    updated_at: datetime

@@ -14,13 +14,14 @@ from sqlalchemy import select
 from app.db.session import AsyncSessionLocal, engine, get_db
 from app.db.base import Base
 from app.models import Room
+from app.core.rbac import SIMULATION_ROLES
 from app.schemas import SimulationEmitRequest
-from app.api.deps import get_current_user
+from app.api.deps import require_roles
 from app.services.broadcaster import broadcaster
 from app.services.demo_data import ensure_demo_platform
 from app.services.mqtt_service import mqtt_service
 from app.services.simulation_service import simulation_service
-from app.api.routers import auth, summary, alerts, devices, health, registry, ota, telemetry
+from app.api.routers import admin, alerts, auth, devices, health, injection, ota, registry, summary, telemetry
 
 # =========================================================
 # LIFECYCLE & STARTUP
@@ -78,6 +79,8 @@ app.include_router(health.router, prefix="/api")
 app.include_router(registry.router, prefix="/api")
 app.include_router(ota.router, prefix="/api")
 app.include_router(telemetry.router, prefix="/api")
+app.include_router(admin.router, prefix="/api")
+app.include_router(injection.router, prefix="/api")
 
 # =========================================================
 # ROOT & HEALTH
@@ -126,12 +129,12 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close()
 
 @app.post("/api/simulation/start")
-async def simulation_start(user=Depends(get_current_user)):
+async def simulation_start(user=Depends(require_roles(*SIMULATION_ROLES))):
     """Start simulation mode."""
     return await simulation_service.start()
 
 @app.post("/api/simulation/stop")
-async def simulation_stop(user=Depends(get_current_user)):
+async def simulation_stop(user=Depends(require_roles(*SIMULATION_ROLES))):
     """Stop simulation mode."""
     return await simulation_service.stop()
 
@@ -143,12 +146,13 @@ async def simulation_emit(
     event_type: str | None = Query(default=None),
     severity: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-    user=Depends(get_current_user),
+    user=Depends(require_roles(*SIMULATION_ROLES)),
 ):
     """Manually emit a simulation event."""
     payload = request or SimulationEmitRequest(
         room_id=room_id,
         room_code=room_code,
+        device_id=request.device_id if request else None,
         event_type=event_type or "heartbeat",
         severity=severity,
     )
@@ -158,6 +162,7 @@ async def simulation_emit(
             db,
             room_id=payload.room_id,
             room_code=payload.room_code,
+            device_id=payload.device_id,
             event_type=payload.event_type,
             severity=payload.severity,
             source=payload.source,

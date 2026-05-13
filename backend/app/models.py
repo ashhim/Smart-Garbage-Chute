@@ -14,7 +14,7 @@ class User(Base, TimestampMixin):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(255), default="Admin")
     password_hash: Mapped[str] = mapped_column(String(255))
-    role: Mapped[str] = mapped_column(String(50), default="admin")
+    role: Mapped[str] = mapped_column(String(50), default="viewer")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 class Building(Base, TimestampMixin):
@@ -59,6 +59,21 @@ class Device(Base, TimestampMixin):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     room = relationship("Room", back_populates="devices")
     sensor_events = relationship("SensorEvent", back_populates="device")
+
+class SimulationNode(Base, TimestampMixin):
+    __tablename__ = "simulation_nodes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    label: Mapped[str] = mapped_column(String(255), default="Simulation Node")
+    room_id: Mapped[int | None] = mapped_column(ForeignKey("rooms.id", ondelete="SET NULL"), nullable=True)
+    sensor_types: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(30), default="staged")
+    linked_device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id", ondelete="SET NULL"), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_event_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    last_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    room = relationship("Room")
+    linked_device = relationship("Device")
 
 class SensorEvent(Base, TimestampMixin):
     __tablename__ = "sensor_events"

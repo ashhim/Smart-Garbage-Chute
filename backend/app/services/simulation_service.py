@@ -142,6 +142,7 @@ class SimulationService:
         *,
         room_id: int | None = None,
         room_code: str | None = None,
+        device_id: str | None = None,
         event_type: str,
         severity: str | None = None,
         source: str = "simulation",
@@ -152,11 +153,24 @@ class SimulationService:
         if not room:
             raise ValueError("Room not found")
 
-        device = room.devices[0] if room.devices else None
+        device = None
+        if device_id:
+            device = next(
+                (
+                    candidate
+                    for candidate in room.devices
+                    if candidate.device_id == device_id or str(candidate.id) == str(device_id)
+                ),
+                None,
+            )
+        elif room.devices:
+            device = room.devices[0]
+
         result = await self._emit_room_event(
             db,
             room,
             device,
+            device_identifier=device_id,
             event_type=event_type,
             severity=severity,
             source=source,
@@ -224,6 +238,7 @@ class SimulationService:
         room: Room,
         device: Device | None,
         *,
+        device_identifier: str | None = None,
         event_type: str,
         severity: str | None = None,
         source: str = "simulation",
@@ -237,13 +252,14 @@ class SimulationService:
             room,
             device,
         )
+        resolved_device_identifier = device_identifier or (device.device_id if device else None)
         event_payload = {
             **base_payload,
             **(payload or {}),
             "room_code": room.room_code,
             "room_name": room.name,
             "source": source,
-            "device_id": device.device_id if device else None,
+            "device_id": resolved_device_identifier,
         }
 
         if device:
@@ -283,7 +299,7 @@ class SimulationService:
             "room_id": room.id,
             "room_code": room.room_code,
             "room_name": room.name,
-            "device_id": device.device_id if device else None,
+            "device_id": resolved_device_identifier,
             "event_type": event_type,
             "severity": resolved_severity,
             "source": source,

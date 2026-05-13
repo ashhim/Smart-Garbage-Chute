@@ -4,6 +4,7 @@ import 'package:timeago/timeago.dart' as timeago;
 
 import '../models/alert.dart';
 import '../services/api_service.dart';
+import '../services/auth_service.dart';
 
 class AlertsScreen extends StatefulWidget {
   const AlertsScreen({super.key});
@@ -63,6 +64,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final canAcknowledge = context.watch<AuthService>().canAcknowledgeAlerts;
+
     return RefreshIndicator(
       onRefresh: _reload,
       child: FutureBuilder<List<Alert>>(
@@ -120,19 +123,21 @@ class _AlertsScreenState extends State<AlertsScreen> {
                   subtitle: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('${alert.roomLabel} • ${alert.category}'),
+                      Text('${alert.roomLabel} | ${alert.category}'),
                       Text(
-                        '${alert.source} • ${timeago.format(alert.createdAt)}',
+                        '${alert.source} | ${timeago.format(alert.createdAt)}',
                         style: const TextStyle(fontSize: 12),
                       ),
                     ],
                   ),
                   trailing: alert.acknowledged
                       ? const Icon(Icons.check_circle, color: Colors.green)
-                      : IconButton(
-                          icon: const Icon(Icons.done_outline),
-                          onPressed: () => _acknowledgeAlert(alert.id),
-                        ),
+                      : canAcknowledge
+                          ? IconButton(
+                              icon: const Icon(Icons.done_outline),
+                              onPressed: () => _acknowledgeAlert(alert.id),
+                            )
+                          : const Icon(Icons.remove_red_eye_outlined),
                 ),
               );
             },

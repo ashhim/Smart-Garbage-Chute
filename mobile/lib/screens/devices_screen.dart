@@ -95,7 +95,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                   ),
                   title: Text(device.deviceId),
                   subtitle: Text(
-                    '${device.roomLabel} • ${device.online ? 'Online' : 'Offline'}',
+                    '${device.roomLabel} | ${device.online ? 'Online' : 'Offline'}',
                   ),
                   childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                   children: [
@@ -113,7 +113,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                       'Last Event',
                       device.lastEventType == null
                           ? '--'
-                          : '${device.lastEventType} • ${device.lastEventAt == null ? '--' : timeago.format(device.lastEventAt!)}',
+                          : '${device.lastEventType} | ${device.lastEventAt == null ? '--' : timeago.format(device.lastEventAt!)}',
                     ),
                   ],
                 ),

@@ -5,6 +5,14 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.rbac import (
+    CLEANING_STAFF,
+    CONTROL_ROOM_OPERATOR,
+    FACILITY_ADMIN,
+    MAINTENANCE_STAFF,
+    SYSTEM_ADMIN,
+    VIEWER,
+)
 from app.core.security import hash_password
 from app.models import (
     AiEvent,
@@ -23,6 +31,13 @@ from app.models import (
 
 DEMO_ADMIN_EMAIL = "admin@alghurair.local"
 DEMO_ADMIN_PASSWORD = "Admin@12345"
+DEMO_PLATFORM_USERS = (
+    ("facility@alghurair.local", "Facility Administrator", FACILITY_ADMIN),
+    ("operator@alghurair.local", "Control Room Operator", CONTROL_ROOM_OPERATOR),
+    ("maintenance@alghurair.local", "Maintenance Team", MAINTENANCE_STAFF),
+    ("cleaning@alghurair.local", "Cleaning Team", CLEANING_STAFF),
+    ("viewer@alghurair.local", "Read Only Viewer", VIEWER),
+)
 
 BUILDING_BLUEPRINTS = (
     {"code": "BLK-01", "name": "Block A - Al Ghurair"},
@@ -36,6 +51,7 @@ FLOOR_LEVELS = (1, 2, 3)
 async def ensure_demo_platform(session: AsyncSession) -> None:
     """Seed and heal demo data without duplicating existing records."""
     await _ensure_admin_user(session)
+    await _ensure_platform_users(session)
     rooms_by_code = await _ensure_site_structure(session)
     await _ensure_firmware_catalog(session)
     await _ensure_operational_baseline(session, rooms_by_code)
@@ -48,7 +64,7 @@ async def _ensure_admin_user(session: AsyncSession) -> None:
     ).scalar_one_or_none()
     if admin:
         admin.full_name = admin.full_name or "System Administrator"
-        admin.role = admin.role or "admin"
+        admin.role = SYSTEM_ADMIN
         admin.is_active = True
         return
 
@@ -57,10 +73,31 @@ async def _ensure_admin_user(session: AsyncSession) -> None:
             email=DEMO_ADMIN_EMAIL,
             full_name="System Administrator",
             password_hash=hash_password(DEMO_ADMIN_PASSWORD),
-            role="admin",
+            role=SYSTEM_ADMIN,
             is_active=True,
         )
     )
+    await session.flush()
+
+
+async def _ensure_platform_users(session: AsyncSession) -> None:
+    for email, full_name, role in DEMO_PLATFORM_USERS:
+        user = (
+            await session.execute(select(User).where(User.email == email))
+        ).scalar_one_or_none()
+        if user:
+            continue
+
+        session.add(
+            User(
+                email=email,
+                full_name=full_name,
+                password_hash=hash_password(DEMO_ADMIN_PASSWORD),
+                role=role,
+                is_active=True,
+            )
+        )
+
     await session.flush()
 
 

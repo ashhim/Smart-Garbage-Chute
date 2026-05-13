@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -11,13 +12,13 @@ class ApiService extends ChangeNotifier {
     String? apiBaseUrl,
     String? websocketUrl,
   })  : _defaultApiBaseUrl = _normalizeApiBaseUrl(
-          apiBaseUrl ?? _resolveApiBaseUrl(),
+          apiBaseUrl ?? _resolveDefaultApiBaseUrl(),
         ),
-        _defaultWebSocketUrl =
-            websocketUrl ?? _deriveWebSocketUrl(apiBaseUrl ?? _resolveApiBaseUrl()),
-        _apiBaseUrl = _normalizeApiBaseUrl(apiBaseUrl ?? _resolveApiBaseUrl()),
+        _defaultWebSocketUrl = websocketUrl ??
+            _deriveWebSocketUrl(apiBaseUrl ?? _resolveDefaultApiBaseUrl()),
+        _apiBaseUrl = _normalizeApiBaseUrl(apiBaseUrl ?? _resolveDefaultApiBaseUrl()),
         _websocketUrl =
-            websocketUrl ?? _deriveWebSocketUrl(apiBaseUrl ?? _resolveApiBaseUrl());
+            websocketUrl ?? _deriveWebSocketUrl(apiBaseUrl ?? _resolveDefaultApiBaseUrl());
 
   static const _apiBaseKey = 'api_base_url';
   static const _webSocketKey = 'ws_url';
@@ -43,10 +44,11 @@ class ApiService extends ChangeNotifier {
       _websocketUrl = savedWebSocketUrl != null && savedWebSocketUrl.isNotEmpty
           ? savedWebSocketUrl
           : _deriveWebSocketUrl(_apiBaseUrl);
-    } else {
-      _apiBaseUrl = _defaultApiBaseUrl;
-      _websocketUrl = _defaultWebSocketUrl;
+      return;
     }
+
+    _apiBaseUrl = _defaultApiBaseUrl;
+    _websocketUrl = _defaultWebSocketUrl;
   }
 
   Future<void> configureBaseUrl(String rawValue) async {
@@ -98,8 +100,30 @@ class ApiService extends ChangeNotifier {
   }
 
   Future<Map<String, dynamic>> probe() async {
-    final payload = await get('/health');
-    return expectMap(payload);
+    return _probeBaseUrl(_apiBaseUrl);
+  }
+
+  Future<bool> isCurrentEndpointReachable() async {
+    try {
+      await _probeBaseUrl(_apiBaseUrl);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> discoverAndConfigure({bool includeLanDiscovery = true}) async {
+    final detected = await _discoverReachableBaseUrl(
+      includeLanDiscovery: includeLanDiscovery,
+    );
+    if (detected == null) {
+      return false;
+    }
+
+    if (detected != _apiBaseUrl) {
+      await configureBaseUrl(detected);
+    }
+    return true;
   }
 
   WebSocketChannel connectWebSocket() {
@@ -148,12 +172,7 @@ class ApiService extends ChangeNotifier {
       return Uri.parse(endpoint);
     }
 
-    final normalizedBase = _apiBaseUrl.endsWith('/')
-        ? _apiBaseUrl.substring(0, _apiBaseUrl.length - 1)
-        : _apiBaseUrl;
-    final normalizedEndpoint =
-        endpoint.startsWith('/') ? endpoint : '/$endpoint';
-    return Uri.parse('$normalizedBase$normalizedEndpoint');
+    return _buildUriForBase(_apiBaseUrl, endpoint);
   }
 
   Map<String, String> _headers() {
@@ -185,23 +204,185 @@ class ApiService extends ChangeNotifier {
     return 'HTTP $statusCode';
   }
 
-  static String _resolveApiBaseUrl() {
+  Future<Map<String, dynamic>> _probeBaseUrl(String baseUrl) async {
+    final response = await http
+        .get(
+          _buildUriForBase(baseUrl, '/health'),
+          headers: const {'Content-Type': 'application/json'},
+        )
+        .timeout(const Duration(milliseconds: 1200));
+
+    final payload = response.body.isEmpty
+        ? const <String, dynamic>{}
+        : expectMap(jsonDecode(response.body));
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(_extractError(payload, response.statusCode));
+    }
+
+    return payload;
+  }
+
+  Future<String?> _discoverReachableBaseUrl({
+    required bool includeLanDiscovery,
+  }) async {
+    final detectedFromKnown =
+        await _probeCandidates(_candidateBaseUrls(), timeout: const Duration(milliseconds: 900));
+    if (detectedFromKnown != null) {
+      return detectedFromKnown;
+    }
+
+    if (!includeLanDiscovery) {
+      return null;
+    }
+
+    return _discoverLanBaseUrl();
+  }
+
+  Future<String?> _probeCandidates(
+    List<String> candidates, {
+    Duration timeout = const Duration(milliseconds: 900),
+  }) async {
+    final uniqueCandidates = <String>{};
+    final normalizedCandidates = <String>[];
+    for (final candidate in candidates) {
+      final normalized = _normalizeApiBaseUrl(candidate);
+      if (uniqueCandidates.add(normalized)) {
+        normalizedCandidates.add(normalized);
+      }
+    }
+
+    for (final candidate in normalizedCandidates) {
+      try {
+        await http
+            .get(
+              _buildUriForBase(candidate, '/health'),
+              headers: const {'Content-Type': 'application/json'},
+            )
+            .timeout(timeout);
+        return candidate;
+      } catch (_) {
+        continue;
+      }
+    }
+
+    return null;
+  }
+
+  Future<String?> _discoverLanBaseUrl() async {
+    try {
+      final privateInterfaces = await NetworkInterface.list(
+        includeLoopback: false,
+        type: InternetAddressType.IPv4,
+      );
+      final prefixes = <String>{};
+      final ownAddresses = <String>{};
+
+      for (final interface in privateInterfaces) {
+        for (final address in interface.addresses) {
+          if (!_isPrivateIpv4(address.address)) {
+            continue;
+          }
+          ownAddresses.add(address.address);
+          final parts = address.address.split('.');
+          if (parts.length == 4) {
+            prefixes.add('${parts[0]}.${parts[1]}.${parts[2]}');
+          }
+        }
+      }
+
+      final hostCandidates = <String>[];
+      const preferredOctets = <int>[1, 2, 10, 20, 50, 100, 101, 110, 150, 200];
+      for (final prefix in prefixes) {
+        final orderedOctets = <int>[
+          ...preferredOctets,
+          ...List.generate(254, (index) => index + 1)
+              .where((octet) => !preferredOctets.contains(octet)),
+        ];
+        for (final octet in orderedOctets) {
+          final host = '$prefix.$octet';
+          if (ownAddresses.contains(host)) {
+            continue;
+          }
+          hostCandidates.add('http://$host/api');
+          hostCandidates.add('http://$host:8520/api');
+        }
+      }
+
+      return _probeCandidates(
+        hostCandidates,
+        timeout: const Duration(milliseconds: 350),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<String> _candidateBaseUrls() {
+    final candidates = <String>[
+      _apiBaseUrl,
+      _defaultApiBaseUrl,
+    ];
+
+    if (Platform.isAndroid) {
+      candidates.addAll(const [
+        'http://10.0.2.2/api',
+        'http://10.0.2.2:8520/api',
+      ]);
+    }
+
+    candidates.addAll(const [
+      'http://127.0.0.1/api',
+      'http://127.0.0.1:8520/api',
+      'http://localhost/api',
+      'http://localhost:8520/api',
+    ]);
+
+    return candidates;
+  }
+
+  static bool _isPrivateIpv4(String address) {
+    final parts = address.split('.');
+    if (parts.length != 4) {
+      return false;
+    }
+
+    final first = int.tryParse(parts[0]);
+    final second = int.tryParse(parts[1]);
+    if (first == null || second == null) {
+      return false;
+    }
+
+    return first == 10 ||
+        (first == 172 && second >= 16 && second <= 31) ||
+        (first == 192 && second == 168);
+  }
+
+  static Uri _buildUriForBase(String baseUrl, String endpoint) {
+    final normalizedBase = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
+    final normalizedEndpoint = endpoint.startsWith('/') ? endpoint : '/$endpoint';
+    return Uri.parse('$normalizedBase$normalizedEndpoint');
+  }
+
+  static String _resolveDefaultApiBaseUrl() {
     const defined = String.fromEnvironment('API_BASE_URL');
     if (defined.isNotEmpty) {
       return _normalizeApiBaseUrl(defined);
     }
 
     if (Platform.isAndroid) {
-      return 'http://10.0.2.2:8520/api';
+      return 'http://10.0.2.2/api';
     }
 
-    return 'http://127.0.0.1:8520/api';
+    return 'http://127.0.0.1/api';
   }
 
   static String _normalizeApiBaseUrl(String rawValue) {
-    var value = rawValue.trim();
+    var value = _sanitizeRawValue(rawValue);
     if (value.isEmpty) {
-      value = _resolveApiBaseUrl();
+      value = _resolveDefaultApiBaseUrl();
     }
 
     if (!value.startsWith('http://') && !value.startsWith('https://')) {
@@ -209,7 +390,8 @@ class ApiService extends ChangeNotifier {
     }
 
     final uri = Uri.parse(value);
-    final pathSegments = uri.pathSegments.where((segment) => segment.isNotEmpty).toList();
+    final pathSegments =
+        uri.pathSegments.where((segment) => segment.isNotEmpty).toList();
     if (pathSegments.isEmpty || pathSegments.last != 'api') {
       pathSegments.add('api');
     }
@@ -220,10 +402,29 @@ class ApiService extends ChangeNotifier {
         .replaceFirst(RegExp(r'/$'), '');
   }
 
+  static String _sanitizeRawValue(String rawValue) {
+    var value = rawValue.trim();
+    if (value.isEmpty) {
+      return value;
+    }
+
+    final queryIndex = value.indexOf('?');
+    if (queryIndex >= 0) {
+      value = value.substring(0, queryIndex);
+    }
+    final fragmentIndex = value.indexOf('#');
+    if (fragmentIndex >= 0) {
+      value = value.substring(0, fragmentIndex);
+    }
+
+    return value.replaceFirst(RegExp(r'/+$'), '');
+  }
+
   static String _deriveWebSocketUrl(String apiBaseUrl) {
     final normalizedApiBaseUrl = _normalizeApiBaseUrl(apiBaseUrl);
     final apiUri = Uri.parse(normalizedApiBaseUrl);
-    final pathSegments = apiUri.pathSegments.where((segment) => segment.isNotEmpty).toList();
+    final pathSegments =
+        apiUri.pathSegments.where((segment) => segment.isNotEmpty).toList();
     if (pathSegments.isNotEmpty && pathSegments.last == 'api') {
       pathSegments.removeLast();
     }

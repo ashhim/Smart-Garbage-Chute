@@ -16,8 +16,10 @@ dependencies:
   flutter_secure_storage: ^9.2.2
   http: ^1.2.2
   provider: ^6.1.2
+  shared_preferences: ^2.3.2
   timeago: ^3.6.1
   web_socket_channel: ^3.0.1
+  workmanager: ^0.6.0
 
 dev_dependencies:
   flutter_test:

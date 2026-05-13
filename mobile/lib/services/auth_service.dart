@@ -3,6 +3,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../models/user.dart';
 import 'api_service.dart';
+import 'notification_service.dart';
 
 class AuthService extends ChangeNotifier {
   AuthService({required this.apiService});
@@ -38,6 +39,8 @@ class AuthService extends ChangeNotifier {
       try {
         await _loadCurrentUser();
         _isAuthenticated = true;
+        await NotificationService.instance
+            .configureBackgroundMonitoring(token: _token);
       } catch (error) {
         debugPrint('Auth restore error: $error');
         await _clearSession(notify: false);
@@ -52,6 +55,17 @@ class AuthService extends ChangeNotifier {
     _lastError = null;
 
     try {
+      final reachable = await apiService.isCurrentEndpointReachable();
+      if (!reachable) {
+        final discovered = await apiService.discoverAndConfigure();
+        if (!discovered) {
+          _lastError =
+              'Backend not reachable. Use emulator auto-detect or enter the LAN host IP.';
+          notifyListeners();
+          return false;
+        }
+      }
+
       final result = await apiService.post('/auth/login', {
         'email': email,
         'password': password,
@@ -72,6 +86,8 @@ class AuthService extends ChangeNotifier {
       _isAuthenticated = true;
       await _storage.write(key: _tokenKey, value: _token);
       await _storage.write(key: _emailKey, value: email);
+      await NotificationService.instance
+          .configureBackgroundMonitoring(token: _token);
 
       notifyListeners();
       return true;
@@ -102,6 +118,7 @@ class AuthService extends ChangeNotifier {
 
     await _storage.delete(key: _tokenKey);
     await _storage.delete(key: _emailKey);
+    await NotificationService.instance.cancelBackgroundMonitoring();
 
     if (notify) {
       notifyListeners();

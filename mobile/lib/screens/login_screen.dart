@@ -124,6 +124,54 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _autoDetectEndpoint() async {
+    setState(() {
+      _isProbing = true;
+      _errorMessage = null;
+      _probeMessage = null;
+    });
+
+    final apiService = context.read<ApiService>();
+    try {
+      final detected = await apiService.discoverAndConfigure();
+
+      if (!mounted) {
+        return;
+      }
+
+      if (!detected) {
+        setState(() {
+          _isProbing = false;
+          _errorMessage =
+              'No reachable backend detected. For LAN testing, enter the computer IP or run the proxy on port 80.';
+        });
+        return;
+      }
+
+      _apiBaseController.text = apiService.apiBaseUrl;
+      final response = await apiService.probe();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isProbing = false;
+        _probeMessage =
+            'Detected ${apiService.apiBaseUrl}. API health: ${response['status'] ?? 'ok'}.';
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isProbing = false;
+        _errorMessage = 'Auto-detect failed: $error';
+      });
+    }
+  }
+
   void _usePreset(String value) {
     setState(() {
       _apiBaseController.text = value;
@@ -178,7 +226,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             decoration: InputDecoration(
                               labelText: 'Backend API URL',
                               helperText:
-                                  'Examples: http://10.0.2.2:8520/api or http://192.168.1.20:8520/api',
+                                  'Examples: http://10.0.2.2/api, http://10.0.2.2:8520/api, or http://192.168.1.20/api',
                               prefixIcon: const Icon(Icons.link_outlined),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
@@ -194,7 +242,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             children: [
                               OutlinedButton(
                                 onPressed: () => _usePreset(
-                                  'http://10.0.2.2:8520/api',
+                                  'http://10.0.2.2/api',
                                 ),
                                 child: const Text('Android Emulator'),
                               ),
@@ -202,7 +250,19 @@ class _LoginScreenState extends State<LoginScreen> {
                                 onPressed: () => _usePreset(
                                   apiService.defaultApiBaseUrl,
                                 ),
-                                child: const Text('This Machine'),
+                                child: const Text('Default'),
+                              ),
+                              OutlinedButton(
+                                onPressed: () => _usePreset(
+                                  'http://127.0.0.1:8520/api',
+                                ),
+                                child: const Text('Raw Backend'),
+                              ),
+                              TextButton(
+                                onPressed: _isLoading || _isProbing
+                                    ? null
+                                    : _autoDetectEndpoint,
+                                child: const Text('Auto Detect'),
                               ),
                               TextButton(
                                 onPressed: () async {
@@ -317,7 +377,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'LAN phones should use your computer IP on port 8520.',
+                    'Emulator uses 10.0.2.2. LAN phones should use the computer IP with /api or :8520/api unless a production HTTPS domain is defined.',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Colors.grey.shade600,
                         ),

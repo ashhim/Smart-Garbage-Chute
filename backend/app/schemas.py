@@ -73,6 +73,17 @@ class RoomOut(RoomCreate):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    building_code: str | None = None
+    building_name: str | None = None
+    floor_level: int | None = None
+    devices_count: int = 0
+    online_devices: int = 0
+    open_alert_count: int = 0
+    primary_device_id: str | None = None
+    primary_device_status: str | None = None
+    last_event_type: str | None = None
+    last_event_at: datetime | None = None
+    status: str = "normal"
 
 
 # =========================
@@ -92,6 +103,15 @@ class DeviceOut(DeviceCreate):
     id: int
     status: str
     last_seen_at: datetime | None = None
+    room_code: str | None = None
+    room_name: str | None = None
+    zone: str | None = None
+    floor_level: int | None = None
+    building_code: str | None = None
+    building_name: str | None = None
+    open_alert_count: int = 0
+    last_event_type: str | None = None
+    last_event_at: datetime | None = None
 
 
 # =========================
@@ -111,6 +131,11 @@ class AlertOut(BaseModel):
     acknowledged_by: str | None = None
     acknowledged_at: datetime | None = None
     created_at: datetime
+    room_code: str | None = None
+    room_name: str | None = None
+    building_code: str | None = None
+    building_name: str | None = None
+    device_id: str | None = None
 
 
 class AcknowledgeRequest(BaseModel):
@@ -162,6 +187,17 @@ class AiEventOut(BaseModel):
     created_at: datetime
 
 
+class AiEventCreate(BaseModel):
+    room_id: int | str | None = None
+    room_code: str | None = None
+    camera_id: str
+    event_type: str
+    confidence: float = 0.0
+    snapshot_url: str | None = None
+    timestamp: int | None = None
+    payload: dict = Field(default_factory=dict)
+
+
 # =========================
 # ANALYTICS SUMMARY
 # =========================
@@ -190,6 +226,16 @@ class SensorEventOut(BaseModel):
     payload: dict
     severity: str
     created_at: datetime
+
+
+class SimulationEmitRequest(BaseModel):
+    room_id: int | None = None
+    room_code: str | None = None
+    event_type: str
+    severity: str | None = None
+    source: str = "simulation"
+    confidence: float | None = None
+    payload: dict = Field(default_factory=dict)
 
 
 # =========================

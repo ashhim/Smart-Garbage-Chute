@@ -11,10 +11,26 @@ class AnalyticsService:
         hour_ago = now - timedelta(hours=1)
         
         counts = {}
-        
-        # Infrastructure counts
-        for model, key in [(Building, 'buildings'), (Floor, 'floors'), (Room, 'rooms'), (Device, 'devices')]:
-            counts[key] = (await db.execute(select(func.count()).select_from(model))).scalar_one()
+
+        counts["buildings"] = (
+            await db.execute(
+                select(func.count(func.distinct(Building.id)))
+                .select_from(Building)
+                .join(Floor, Floor.building_id == Building.id)
+                .join(Room, Room.floor_id == Floor.id)
+            )
+        ).scalar_one()
+
+        counts["floors"] = (
+            await db.execute(
+                select(func.count(func.distinct(Floor.id)))
+                .select_from(Floor)
+                .join(Room, Room.floor_id == Floor.id)
+            )
+        ).scalar_one()
+
+        counts["rooms"] = (await db.execute(select(func.count()).select_from(Room))).scalar_one()
+        counts["devices"] = (await db.execute(select(func.count()).select_from(Device))).scalar_one()
         
         # Alert statistics
         counts['alerts_open'] = (await db.execute(

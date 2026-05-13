@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.services.alert_engine import alert_engine
 from app.services.broadcaster import broadcaster
-from app.models import Device, Room, SensorEvent
+from app.models import Device, Room
 from app.db.session import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -82,33 +82,31 @@ class MqttService:
                     event_type = "motion"
                     severity = "info"
                 
-                # Create sensor event
-                event = SensorEvent(
-                    room_id=room.id,
-                    device_id=device_id,
-                    event_type=event_type,
-                    payload=payload,
-                    severity=severity
-                )
-                db.add(event)
-                
                 # Update device last_seen_at timestamp
                 if device:
                     from datetime import datetime, timezone
                     device.last_seen_at = datetime.now(timezone.utc)
+                    device.status = "online"
                 
+                await alert_engine.ingest_sensor_event(
+                    db,
+                    room.id,
+                    device_id,
+                    event_type,
+                    {
+                        **payload,
+                        "room_code": room_code,
+                        "source": "mqtt",
+                    },
+                    severity,
+                    source="sensor",
+                )
                 await db.commit()
-                
-                # Generate alert if needed
-                if severity != "info":
-                    await alert_engine.ingest_sensor_event(
-                        db, room.id, device_id, event_type, payload, severity
-                    )
-                    await db.commit()
                 
                 # Broadcast to WebSocket subscribers
                 await broadcaster.publish("telemetry", {
                     "type": "telemetry",
+                    "room_id": room.id,
                     "room_code": room_code,
                     "event_type": event_type,
                     "payload": payload,

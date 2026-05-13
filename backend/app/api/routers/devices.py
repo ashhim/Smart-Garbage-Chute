@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select
 from app.db.session import get_db
-from app.models import Device, Room
+from app.models import Device
 from app.schemas import DeviceOut
 from app.api.deps import get_current_user
+from app.services.dashboard_service import dashboard_service
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
@@ -17,16 +18,13 @@ async def list_devices(
     user=Depends(get_current_user)
 ):
     """List all devices with optional filtering."""
-    query = select(Device)
-    
-    if room_id:
-        query = query.where(Device.room_id == room_id)
-    if status:
-        query = query.where(Device.status == status)
-    
-    query = query.order_by(desc(Device.id)).limit(limit)
-    results = (await db.execute(query)).scalars().all()
-    return [DeviceOut.model_validate(d) for d in results]
+    results = await dashboard_service.list_devices(
+        db,
+        room_id=room_id,
+        status=status,
+        limit=limit,
+    )
+    return [DeviceOut.model_validate(device) for device in results]
 
 @router.get("/{device_id}", response_model=DeviceOut)
 async def get_device(

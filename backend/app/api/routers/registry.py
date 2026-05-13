@@ -5,6 +5,7 @@ from app.db.session import get_db
 from app.models import Building, Floor, Room, Device
 from app.schemas import BuildingCreate, BuildingOut, FloorCreate, FloorOut, RoomCreate, RoomOut, DeviceCreate, DeviceOut
 from app.api.deps import get_current_user
+from app.services.dashboard_service import dashboard_service
 
 router = APIRouter(tags=["registry"])
 
@@ -28,7 +29,8 @@ async def create_floor(payload: FloorCreate, db: AsyncSession = Depends(get_db),
 
 @router.get("/rooms", response_model=list[RoomOut])
 async def list_rooms(db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
-    return (await db.execute(select(Room).order_by(Room.id))).scalars().all()
+    rooms = await dashboard_service.list_rooms(db)
+    return [RoomOut.model_validate(room) for room in rooms]
 
 @router.post("/rooms", response_model=RoomOut)
 async def create_room(payload: RoomCreate, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):

@@ -1,67 +1,112 @@
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from app.models import Alert, SensorEvent, Room, Device
+from app.models import Alert, SensorEvent, Room
 from app.services.broadcaster import broadcaster
 import logging
 
 logger = logging.getLogger(__name__)
 
 class AlertEngine:
-    async def ingest_sensor_event(self, db: AsyncSession, room_id: int, device_id: int | None, event_type: str, payload: dict, severity: str = "medium") -> Alert | None:
+    async def ingest_sensor_event(
+        self,
+        db: AsyncSession,
+        room_id: int,
+        device_id: int | None,
+        event_type: str,
+        payload: dict,
+        severity: str = "medium",
+        source: str | None = None,
+    ) -> Alert | None:
         """Ingest sensor event and create alert if needed."""
-        event = SensorEvent(room_id=room_id, device_id=device_id, event_type=event_type, payload=payload, severity=severity)
+        event = SensorEvent(
+            room_id=room_id,
+            device_id=device_id,
+            event_type=event_type,
+            payload=payload,
+            severity=severity,
+        )
         db.add(event)
-        alert = None
-        
-        if event_type in {"blockage", "door_prolonged_open", "leak", "overflow", "misuse", "ai_misuse"}:
-            # Get room code for logging
-            room = await db.get(Room, room_id)
-            room_code = room.room_code if room else "UNKNOWN"
-            
-            message = payload.get("message") or f"{event_type.replace('_', ' ').title()} detected"
-            alert = Alert(
-                room_id=room_id,
-                source="sensor" if event_type != "ai_misuse" else "ai",
-                category=event_type,
-                message=message,
-                severity=severity
+
+        if event_type not in {
+            "blockage",
+            "door_prolonged_open",
+            "leak",
+            "overflow",
+            "misuse",
+            "ai_misuse",
+            "garbage_left",
+            "garbage_on_floor",
+        }:
+            return None
+
+        message = payload.get("message") or f"{event_type.replace('_', ' ').title()} detected"
+        alert_source = source or ("sensor" if event_type != "ai_misuse" else "ai")
+        return await self.create_alert(
+            db,
+            room_id=room_id,
+            category=event_type,
+            message=message,
+            severity=severity,
+            source=alert_source,
+        )
+
+    async def create_alert(
+        self,
+        db: AsyncSession,
+        room_id: int,
+        category: str,
+        message: str,
+        severity: str = "medium",
+        source: str = "sensor",
+    ) -> Alert:
+        room = await db.get(Room, room_id)
+        room_code = room.room_code if room else "UNKNOWN"
+
+        alert = Alert(
+            room_id=room_id,
+            source=source,
+            category=category,
+            message=message,
+            severity=severity,
+        )
+        db.add(alert)
+        await db.flush()
+
+        await broadcaster.publish("alerts", {
+            "type": "alert.created",
+            "id": alert.id,
+            "alert_id": alert.id,
+            "room_id": room_id,
+            "room_code": room_code,
+            "category": category,
+            "message": message,
+            "severity": severity,
+            "acknowledged": False,
+            "source": source,
+            "created_at": alert.created_at.isoformat() if alert.created_at else None,
+        })
+
+        logger.info("alert.created", extra={
+            "alert_id": alert.id,
+            "room_code": room_code,
+            "category": category,
+            "severity": severity,
+            "source": source,
+        })
+
+        try:
+            from app.services.notification_service import notification_service
+            await notification_service.send_alert_notification(
+                db,
+                alert.id,
+                room_code,
+                category,
+                severity,
+                message,
             )
-            db.add(alert)
-            await db.flush()
-            
-            # Broadcast to WebSocket subscribers
-            await broadcaster.publish("alerts", {
-                "type": "alert.created",
-                "alert_id": alert.id,
-                "room_id": room_id,
-                "room_code": room_code,
-                "category": event_type,
-                "message": message,
-                "severity": severity
-            })
-            
-            logger.info("alert.created", extra={
-                "alert_id": alert.id,
-                "room_code": room_code,
-                "category": event_type,
-                "severity": severity
-            })
-            
-            # Send notifications through multiple channels
-            try:
-                from app.services.notification_service import notification_service
-                await notification_service.send_alert_notification(
-                    db,
-                    alert.id,
-                    room_code,
-                    event_type,
-                    severity,
-                    message
-                )
-            except Exception as exc:
-                logger.exception("alert.notification_failed", exc_info=exc)
-        
+        except Exception as exc:
+            logger.exception("alert.notification_failed", exc_info=exc)
+
         return alert
 
     async def acknowledge(self, db: AsyncSession, alert_id: int, actor: str) -> Alert | None:
@@ -75,7 +120,9 @@ class AlertEngine:
         
         await broadcaster.publish("alerts", {
             "type": "alert.acknowledged",
+            "id": alert_id,
             "alert_id": alert_id,
+            "acknowledged": True,
             "actor": actor
         })
         

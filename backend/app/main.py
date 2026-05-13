@@ -4,30 +4,22 @@ Central orchestrator for IoT device management, alerts, AI detections, and OTA u
 """
 
 from contextlib import asynccontextmanager
-from datetime import datetime
-import json
-import asyncio
-import random
-from typing import List
+from datetime import datetime, timezone
 
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import Body, FastAPI, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select
 
-from app.db.session import get_db, engine, AsyncSessionLocal
+from app.db.session import AsyncSessionLocal, engine, get_db
 from app.db.base import Base
-from app.models import (
-    User, Building, Floor, Room, Device, SensorEvent, Alert, 
-    AiEvent, MaintenanceLog, FirmwareVersion, OtaJob, Notification
-)
-from app.schemas import (
-    LoginRequest, TokenResponse, SummaryOut, AlertOut, DeviceOut, 
-    RoomOut, SensorEventOut
-)
-from app.core.security import create_access_token, hash_password, verify_password
+from app.models import Room
+from app.schemas import SimulationEmitRequest
+from app.api.deps import get_current_user
 from app.services.broadcaster import broadcaster
+from app.services.demo_data import ensure_demo_platform
 from app.services.mqtt_service import mqtt_service
+from app.services.simulation_service import simulation_service
 from app.api.routers import auth, summary, alerts, devices, health, registry, ota, telemetry
 
 # =========================================================
@@ -40,74 +32,7 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
     
     async with AsyncSessionLocal() as session:
-        # Check if admin exists
-        admin = (await session.execute(select(User).where(User.email == "admin@alghurair.local"))).scalar_one_or_none()
-        if not admin:
-            # Create admin user
-            admin_user = User(
-                email="admin@alghurair.local",
-                full_name="System Administrator",
-                password_hash=hash_password("Admin@12345"),
-                role="admin",
-                is_active=True
-            )
-            session.add(admin_user)
-            await session.commit()
-        
-        # Seed buildings and structure if empty
-        building_count = (await session.execute(select(func.count(Building.id)))).scalar()
-        if building_count == 0:
-            # Create 2 buildings
-            bldg1 = Building(code="BLK-01", name="Block A - Al Ghurair")
-            bldg2 = Building(code="BLK-02", name="Block B - Al Ghurair")
-            session.add_all([bldg1, bldg2])
-            await session.flush()
-            
-            # Create floors
-            for b in [bldg1, bldg2]:
-                for level in [1, 2, 3]:
-                    floor = Floor(building=b, level=level, name=f"Level {level}")
-                    session.add(floor)
-            
-            await session.flush()
-            
-            # Create rooms and devices
-            floors = (await session.execute(select(Floor))).scalars().all()
-            room_counter = 1
-            for floor in floors:
-                for room_num in range(1, 6):
-                    room_code = f"CHR_{room_counter:02d}"
-                    room = Room(
-                        floor=floor,
-                        room_code=room_code,
-                        name=f"Chute Room {room_counter}",
-                        zone="chute-room"
-                    )
-                    session.add(room)
-                    await session.flush()
-                    
-                    # Add device
-                    device = Device(
-                        room_id=room.id,
-                        device_id=f"ESP32-{room_counter:02d}",
-                        device_type="esp32-s3-poe",
-                        firmware_version="1.2.1",
-                        status="online",
-                        last_seen_at=datetime.utcnow()
-                    )
-                    session.add(device)
-                    room_counter += 1
-            
-            # Create firmware versions
-            fw = FirmwareVersion(
-                version="1.2.1",
-                build_sha="abc123def456",
-                artifact_url="https://example.com/firmware/v1.2.1.bin",
-                is_active=True
-            )
-            session.add(fw)
-            
-            await session.commit()
+        await ensure_demo_platform(session)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -118,6 +43,8 @@ async def lifespan(app: FastAPI):
     mqtt_service.start()  # Start MQTT consumer
     yield
     # Shutdown
+    if simulation_service.active:
+        await simulation_service.stop()
     await broadcaster.disconnect()
 
 app = FastAPI(
@@ -168,7 +95,7 @@ async def root():
 async def health_check():
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 # =========================================================
@@ -198,160 +125,44 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"WebSocket error: {e}")
         await websocket.close()
 
-# =========================================================
-# SIMULATION MODE
-# =========================================================
-# Provides fake telemetry, alerts, and AI detections for demo mode
-
-simulation_active = False
-simulation_task = None
-
-async def simulation_loop(db: AsyncSession):
-    """Generate simulated sensor events and alerts."""
-    global simulation_active
-    
-    while simulation_active:
-        try:
-            # Get all rooms
-            rooms = (await db.execute(select(Room))).scalars().all()
-            
-            if not rooms:
-                await asyncio.sleep(5)
-                continue
-            
-            # Pick random room and event
-            room = random.choice(rooms)
-            event_types = ["blockage", "overflow", "leak", "door_open", "motion"]
-            event_type = random.choice(event_types)
-            
-            # Create sensor event
-            sensor_event = SensorEvent(
-                room_id=room.id,
-                event_type=event_type,
-                payload={
-                    "sensor": event_type,
-                    "timestamp": datetime.utcnow().isoformat()
-                },
-                severity=random.choice(["low", "medium", "high"]) if random.random() > 0.7 else "info"
-            )
-            db.add(sensor_event)
-            
-            # Maybe create an alert
-            if random.random() > 0.6:
-                alert = Alert(
-                    room_id=room.id,
-                    source="sensor",
-                    category=event_type,
-                    message=f"Simulated {event_type} in {room.name}",
-                    severity=random.choice(["low", "medium", "high"])
-                )
-                db.add(alert)
-                
-                # Broadcast alert
-                await broadcaster.publish(
-                    "alerts",
-                    json.dumps({
-                        "type": "alert",
-                        "id": alert.id,
-                        "severity": alert.severity,
-                        "message": alert.message,
-                        "room_id": room.id
-                    })
-                )
-            
-            await db.commit()
-            
-            # Broadcast sensor telemetry
-            await broadcaster.publish(
-                "telemetry",
-                json.dumps({
-                    "type": "telemetry",
-                    "room_id": room.id,
-                    "event_type": event_type,
-                    "timestamp": datetime.utcnow().isoformat()
-                })
-            )
-            
-            await asyncio.sleep(random.uniform(3, 8))
-        
-        except Exception as e:
-            print(f"Simulation error: {e}")
-            await asyncio.sleep(5)
-
 @app.post("/api/simulation/start")
-async def simulation_start(db: AsyncSession = Depends(get_db)):
+async def simulation_start(user=Depends(get_current_user)):
     """Start simulation mode."""
-    global simulation_active, simulation_task
-    
-    if simulation_active:
-        return {"ok": False, "message": "Simulation already running"}
-    
-    simulation_active = True
-    simulation_task = asyncio.create_task(simulation_loop(db))
-    
-    return {"ok": True, "message": "Simulation started"}
+    return await simulation_service.start()
 
 @app.post("/api/simulation/stop")
-async def simulation_stop():
+async def simulation_stop(user=Depends(get_current_user)):
     """Stop simulation mode."""
-    global simulation_active, simulation_task
-    
-    if not simulation_active:
-        return {"ok": False, "message": "Simulation not running"}
-    
-    simulation_active = False
-    if simulation_task:
-        simulation_task.cancel()
-        try:
-            await simulation_task
-        except asyncio.CancelledError:
-            pass
-    
-    return {"ok": True, "message": "Simulation stopped"}
+    return await simulation_service.stop()
 
 @app.post("/api/simulation/emit")
 async def simulation_emit(
-    room_id: int = Query(...),
-    event_type: str = Query(...),
-    severity: str = Query("medium"),
-    db: AsyncSession = Depends(get_db)
+    request: SimulationEmitRequest | None = Body(default=None),
+    room_id: int | None = Query(default=None),
+    room_code: str | None = Query(default=None),
+    event_type: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
 ):
     """Manually emit a simulation event."""
-    room = (await db.execute(select(Room).where(Room.id == room_id))).scalar_one_or_none()
-    if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
-    
-    # Create sensor event
-    sensor_event = SensorEvent(
-        room_id=room.id,
-        event_type=event_type,
-        payload={"source": "manual_sim", "timestamp": datetime.utcnow().isoformat()},
-        severity=severity
+    payload = request or SimulationEmitRequest(
+        room_id=room_id,
+        room_code=room_code,
+        event_type=event_type or "heartbeat",
+        severity=severity,
     )
-    db.add(sensor_event)
-    
-    # Create alert if severity is not info
-    if severity != "info":
-        alert = Alert(
-            room_id=room.id,
-            source="simulation",
-            category=event_type,
-            message=f"Simulated {event_type} in {room.name}",
-            severity=severity
+
+    try:
+        return await simulation_service.emit(
+            db,
+            room_id=payload.room_id,
+            room_code=payload.room_code,
+            event_type=payload.event_type,
+            severity=payload.severity,
+            source=payload.source,
+            payload=payload.payload,
+            confidence=payload.confidence,
         )
-        db.add(alert)
-        
-        await broadcaster.publish(
-            "alerts",
-            json.dumps({
-                "type": "alert",
-                "event_type": event_type,
-                "severity": severity,
-                "room_id": room.id,
-                "timestamp": datetime.utcnow().isoformat()
-            })
-        )
-    
-    await db.commit()
-    
-    return {"ok": True, "event_type": event_type, "room_id": room_id}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

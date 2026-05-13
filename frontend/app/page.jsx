@@ -3,34 +3,27 @@
 import useSWR from 'swr';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
   AlertTriangle,
-  Building2,
-  Cpu,
   BellRing,
+  Building2,
+  Camera,
+  CheckCircle2,
+  Clock3,
+  Cpu,
   Loader2,
   LogOut,
-  Activity,
-  ShieldCheck,
-  Server,
-  Wifi,
-  Radio,
-  Camera,
-  Trash2,
-  Clock3,
   MapPinned,
-  RefreshCw,
-  TriangleAlert,
-  BadgeAlert,
-  Waves,
-  DoorClosed,
-  DoorOpen,
-  Flame,
-  CircleAlert,
-  Zap,
-  Send,
   PlayCircle,
+  Radio,
+  RefreshCw,
+  Send,
+  Server,
+  ShieldCheck,
   Square,
-  CheckCircle2,
+  Trash2,
+  TriangleAlert,
+  Wifi,
 } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost/api';
@@ -41,12 +34,31 @@ function cn(...classes) {
 }
 
 function formatTime(value) {
-  if (!value) return '—';
+  if (!value) return '--';
   try {
-    const d = new Date(value);
-    return d.toLocaleString();
+    const date = new Date(value);
+    return date.toLocaleString();
   } catch {
     return String(value);
+  }
+}
+
+function formatEventLabel(value) {
+  return value ? String(value).replaceAll('_', ' ') : 'event';
+}
+
+function roomStatusStyles(status) {
+  switch (status) {
+    case 'attention':
+      return 'border-amber-400/20 bg-amber-500/10 text-amber-100';
+    case 'offline':
+      return 'border-rose-400/20 bg-rose-500/10 text-rose-100';
+    case 'active':
+      return 'border-cyan-400/20 bg-cyan-500/10 text-cyan-100';
+    case 'unassigned':
+      return 'border-slate-400/20 bg-slate-500/10 text-slate-200';
+    default:
+      return 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100';
   }
 }
 
@@ -75,16 +87,15 @@ function useFetcher() {
         });
 
         const data = await res.json();
-
         if (data?.access_token) {
           sessionStorage.setItem('sgc_token', data.access_token);
           setToken(data.access_token);
         } else {
           setAuthError(data?.detail || 'Authentication failed');
         }
-      } catch (err) {
+      } catch (error) {
         setAuthError('Backend unavailable');
-        console.error(err);
+        console.error(error);
       } finally {
         setLoading(false);
       }
@@ -126,22 +137,22 @@ function useSocket(enabled) {
   const [events, setEvents] = useState([]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) return undefined;
 
     let ws;
 
     try {
       ws = new WebSocket(WS_URL);
     } catch {
-      return;
+      return undefined;
     }
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         setEvents((prev) => [data, ...prev].slice(0, 20));
-      } catch (e) {
-        console.error(e);
+      } catch (error) {
+        console.error(error);
       }
     };
 
@@ -161,9 +172,7 @@ function LoadingScreen() {
           <Loader2 className="w-8 h-8 animate-spin text-cyan-300" />
         </div>
         <h1 className="text-2xl font-semibold tracking-tight">Smart Garbage Chute</h1>
-        <p className="text-slate-400 mt-2">
-          Initializing industrial monitoring console...
-        </p>
+        <p className="text-slate-400 mt-2">Initializing industrial monitoring console...</p>
       </div>
     </div>
   );
@@ -191,20 +200,19 @@ function MetricCard({ icon: Icon, label, value, helper, tone = 'cyan' }) {
     amber: 'from-amber-500/20 to-amber-500/5 border-amber-400/20',
     rose: 'from-rose-500/20 to-rose-500/5 border-rose-400/20',
     emerald: 'from-emerald-500/20 to-emerald-500/5 border-emerald-400/20',
-    slate: 'from-slate-500/20 to-slate-500/5 border-slate-400/20',
   };
 
   return (
-    <div className={cn(
-      'rounded-2xl border bg-gradient-to-br p-5 shadow-[0_10px_40px_rgba(0,0,0,0.25)] backdrop-blur',
-      tones[tone] || tones.cyan
-    )}>
+    <div
+      className={cn(
+        'rounded-2xl border bg-gradient-to-br p-5 shadow-[0_10px_40px_rgba(0,0,0,0.25)] backdrop-blur',
+        tones[tone] || tones.cyan
+      )}
+    >
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-sm text-slate-400">{label}</p>
-          <div className="mt-2 text-3xl font-semibold tracking-tight text-white">
-            {value}
-          </div>
+          <div className="mt-2 text-3xl font-semibold tracking-tight text-white">{value}</div>
           {helper ? <p className="mt-2 text-xs text-slate-500">{helper}</p> : null}
         </div>
         <div className="h-12 w-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
@@ -237,34 +245,30 @@ function AlertItem({ alert, onAck }) {
     info: 'border-slate-500/40 bg-slate-500/10 text-slate-100',
   };
 
+  const roomRef = alert.room_code || alert.room_id || '--';
+
   return (
     <div className={cn('rounded-2xl border p-4', severityStyles[alert.severity] || severityStyles.medium)}>
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4" />
-            <div className="font-semibold uppercase tracking-wide">
-              {String(alert.category || 'alert').replaceAll('_', ' ')}
-            </div>
-            <Badge className="border-white/15 text-white/80">
-              {alert.severity || 'medium'}
-            </Badge>
+            <div className="font-semibold uppercase tracking-wide">{formatEventLabel(alert.category || 'alert')}</div>
+            <Badge className="border-white/15 text-white/80">{alert.severity || 'medium'}</Badge>
           </div>
 
           <p className="text-sm text-white/85">{alert.message || 'No message provided'}</p>
 
           <div className="flex flex-wrap items-center gap-3 text-xs text-white/60">
-            <span>Room: {alert.room_id ?? '—'}</span>
-            <span>Source: {alert.source ?? 'system'}</span>
+            <span>Room: {roomRef}</span>
+            <span>Source: {alert.source || 'system'}</span>
             <span>Time: {formatTime(alert.created_at || alert.timestamp)}</span>
           </div>
         </div>
 
         <div className="flex flex-col items-end gap-2">
           {alert.acknowledged ? (
-            <Badge className="border-emerald-400/30 bg-emerald-500/10 text-emerald-200">
-              ACKED
-            </Badge>
+            <Badge className="border-emerald-400/30 bg-emerald-500/10 text-emerald-200">ACKED</Badge>
           ) : (
             <button
               onClick={() => onAck?.(alert)}
@@ -280,19 +284,33 @@ function AlertItem({ alert, onAck }) {
   );
 }
 
+function Row({ label, value }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-slate-500">{label}</span>
+      <span className="text-white text-right">{value}</span>
+    </div>
+  );
+}
+
 function DeviceCard({ device }) {
   const online = String(device.status || '').toLowerCase() === 'online';
+  const roomRef = device.room_code || device.room_id || '--';
+  const roomLabel = device.room_name ? `${roomRef} - ${device.room_name}` : roomRef;
+  const location =
+    device.building_code && device.floor_level
+      ? `${device.building_code} / Level ${device.floor_level}`
+      : '--';
+  const lastEvent = device.last_event_type
+    ? `${formatEventLabel(device.last_event_type)} @ ${formatTime(device.last_event_at)}`
+    : '--';
 
   return (
     <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5 shadow-[0_10px_30px_rgba(0,0,0,0.2)]">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-white font-semibold tracking-tight">
-            {device.device_id || 'Unknown Device'}
-          </h3>
-          <p className="text-slate-400 text-sm mt-1">
-            {device.device_type || 'ESP32 PoE Node'}
-          </p>
+          <h3 className="text-white font-semibold tracking-tight">{device.device_id || 'Unknown Device'}</h3>
+          <p className="text-slate-400 text-sm mt-1">{device.device_type || 'ESP32 PoE Node'}</p>
         </div>
 
         <div
@@ -304,9 +322,12 @@ function DeviceCard({ device }) {
       </div>
 
       <div className="mt-5 space-y-3 text-sm">
-        <Row label="Room" value={device.room_id ?? '—'} />
-        <Row label="Firmware" value={device.firmware_version ?? '—'} />
+        <Row label="Room" value={roomLabel} />
+        <Row label="Location" value={location} />
+        <Row label="Firmware" value={device.firmware_version || '--'} />
         <Row label="Last Seen" value={formatTime(device.last_seen_at)} />
+        <Row label="Last Event" value={lastEvent} />
+        <Row label="Open Alerts" value={device.open_alert_count ?? 0} />
         <Row
           label="State"
           value={
@@ -320,34 +341,17 @@ function DeviceCard({ device }) {
   );
 }
 
-function Row({ label, value }) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <span className="text-slate-500">{label}</span>
-      <span className="text-white text-right">{value}</span>
-    </div>
-  );
-}
-
 function TimelineEvent({ item }) {
-  const label =
-    item?.type ||
-    item?.event_type ||
-    item?.category ||
-    'event';
+  const label = item?.type || item?.event_type || item?.category || 'event';
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-full bg-cyan-300" />
-          <span className="text-sm font-medium text-white">
-            {String(label).replaceAll('_', ' ')}
-          </span>
+          <span className="text-sm font-medium text-white">{formatEventLabel(label)}</span>
         </div>
-        <span className="text-xs text-slate-500">
-          {formatTime(item?.timestamp || item?.created_at || item?.time)}
-        </span>
+        <span className="text-xs text-slate-500">{formatTime(item?.timestamp || item?.created_at || item?.time)}</span>
       </div>
       <pre className="mt-2 overflow-auto rounded-lg bg-black/20 p-3 text-[11px] leading-5 text-cyan-200">
         {JSON.stringify(item, null, 2)}
@@ -365,90 +369,116 @@ export default function Page() {
   const [simulationEvent, setSimulationEvent] = useState('blockage');
   const [simMessage, setSimMessage] = useState('');
 
-  const { data: summary } = useSWR(
-    token ? `${API_BASE}/analytics/summary` : null,
-    fetcher,
-    { refreshInterval: 5000 }
-  );
+  const { data: summary } = useSWR(token ? `${API_BASE}/analytics/summary` : null, fetcher, {
+    refreshInterval: 5000,
+  });
 
-  const { data: alerts } = useSWR(
-    token ? `${API_BASE}/alerts` : null,
-    fetcher,
-    { refreshInterval: 5000 }
-  );
+  const { data: alerts } = useSWR(token ? `${API_BASE}/alerts` : null, fetcher, {
+    refreshInterval: 5000,
+  });
 
-  const { data: devices } = useSWR(
-    token ? `${API_BASE}/devices` : null,
-    fetcher,
-    { refreshInterval: 5000 }
-  );
+  const { data: devices } = useSWR(token ? `${API_BASE}/devices` : null, fetcher, {
+    refreshInterval: 5000,
+  });
 
-  const deviceList = useMemo(() => Array.isArray(devices) ? devices : [], [devices]);
-  const alertList = useMemo(() => Array.isArray(alerts) ? alerts : [], [alerts]);
-  const liveRooms = useMemo(() => {
+  const { data: rooms } = useSWR(token ? `${API_BASE}/rooms` : null, fetcher, {
+    refreshInterval: 5000,
+  });
+
+  const deviceList = useMemo(() => (Array.isArray(devices) ? devices : []), [devices]);
+  const alertList = useMemo(() => (Array.isArray(alerts) ? alerts : []), [alerts]);
+  const inferredRooms = useMemo(() => {
     const map = new Map();
 
-    for (const d of deviceList) {
-      if (d?.room_id) map.set(String(d.room_id), d);
+    for (const device of deviceList) {
+      if (device?.room_id) {
+        map.set(String(device.room_id), {
+          room_id: device.room_id,
+          room_code: device.room_code,
+          room_name: device.room_name,
+          building_code: device.building_code,
+          floor_level: device.floor_level,
+          open_alert_count: device.open_alert_count,
+          status: String(device.status || '').toLowerCase() === 'online' ? 'normal' : 'offline',
+        });
+      }
     }
 
-    for (const a of alertList) {
-      if (a?.room_id && !map.has(String(a.room_id))) {
-        map.set(String(a.room_id), { room_id: a.room_id });
+    for (const alert of alertList) {
+      if (alert?.room_id && !map.has(String(alert.room_id))) {
+        map.set(String(alert.room_id), {
+          room_id: alert.room_id,
+          room_code: alert.room_code,
+          room_name: alert.room_name,
+          open_alert_count: alert.acknowledged ? 0 : 1,
+          status: alert.acknowledged ? 'normal' : 'attention',
+        });
       }
     }
 
     return [...map.values()];
   }, [deviceList, alertList]);
 
+  const roomList = useMemo(() => {
+    if (Array.isArray(rooms) && rooms.length > 0) return rooms;
+    return inferredRooms;
+  }, [rooms, inferredRooms]);
+
   useEffect(() => {
-    if (deviceList.length > 0) {
-      setSimulationRoom(String(deviceList[0]?.room_id || 'CHR_01'));
+    if (roomList.length > 0) {
+      setSimulationRoom(String(roomList[0]?.room_code || roomList[0]?.room_id || 'CHR_01'));
     }
-  }, [deviceList.length]);
+  }, [roomList]);
 
-  const onAck = useCallback(async (alert) => {
-    try {
-      const res = await fetch(`${API_BASE}/alerts/${alert.id}/acknowledge`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+  const onAck = useCallback(
+    async (alert) => {
+      try {
+        const res = await fetch(`${API_BASE}/alerts/${alert.id}/acknowledge`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
 
-      if (!res.ok) throw new Error('Failed to acknowledge alert');
-    } catch (error) {
-      console.error(error);
-      setSimMessage('Acknowledge action failed.');
-    }
-  }, [token]);
-
-  const callSimulation = useCallback(async (path, body) => {
-    setSimMessage('');
-    try {
-      const res = await fetch(`${API_BASE}/simulation${path}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: body ? JSON.stringify(body) : undefined,
-      });
-
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        throw new Error(data?.detail || 'Simulation request failed');
+        if (!res.ok) throw new Error('Failed to acknowledge alert');
+      } catch (error) {
+        console.error(error);
+        setSimMessage('Acknowledge action failed.');
       }
+    },
+    [token]
+  );
 
-      setSimMessage(data?.ok ? 'Simulation updated successfully.' : 'Simulation action sent.');
-      return data;
-    } catch (error) {
-      console.error(error);
-      setSimMessage(error.message || 'Simulation request failed.');
-      return null;
-    }
-  }, [token]);
+  const callSimulation = useCallback(
+    async (path, body) => {
+      setSimMessage('');
+      try {
+        const res = await fetch(`${API_BASE}/simulation${path}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: body ? JSON.stringify(body) : undefined,
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.detail || 'Simulation request failed');
+        }
+
+        if (data?.ok && path === '/start') setSimulationRunning(true);
+        if (data?.ok && path === '/stop') setSimulationRunning(false);
+        setSimMessage(data?.ok ? 'Simulation updated successfully.' : 'Simulation action sent.');
+        return data;
+      } catch (error) {
+        console.error(error);
+        setSimMessage(error.message || 'Simulation request failed.');
+        return null;
+      }
+    },
+    [token]
+  );
 
   if (loading) return <LoadingScreen />;
 
@@ -474,7 +504,7 @@ export default function Page() {
     );
   }
 
-  const onlineDevices = deviceList.filter((d) => String(d?.status || '').toLowerCase() === 'online').length;
+  const onlineDevices = deviceList.filter((device) => String(device?.status || '').toLowerCase() === 'online').length;
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(15,23,42,0.7),_rgba(2,6,23,1)_45%)] text-white">
@@ -485,14 +515,12 @@ export default function Page() {
               <Building2 className="w-6 h-6 text-cyan-300" />
             </div>
             <div>
-              <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">
-                Smart Garbage Chute Control Room
-              </h1>
+              <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Smart Garbage Chute Control Room</h1>
               <div className="flex flex-wrap items-center gap-2 mt-1 text-sm text-slate-400">
                 <span>Al Ghurair</span>
-                <span className="text-slate-600">•</span>
+                <span className="text-slate-600">|</span>
                 <span>Realtime Monitoring</span>
-                <span className="text-slate-600">•</span>
+                <span className="text-slate-600">|</span>
                 <span>Simulation Enabled</span>
               </div>
             </div>
@@ -536,7 +564,7 @@ export default function Page() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3">
                   <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Live Rooms</div>
-                  <div className="mt-1 text-2xl font-semibold">{liveRooms.length}</div>
+                  <div className="mt-1 text-2xl font-semibold">{roomList.length}</div>
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3">
                   <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Online Devices</div>
@@ -546,18 +574,10 @@ export default function Page() {
             </div>
 
             <div className="mt-6 flex flex-wrap items-center gap-3">
-              <Badge className="border-cyan-400/20 bg-cyan-500/10 text-cyan-200">
-                MQTT
-              </Badge>
-              <Badge className="border-violet-400/20 bg-violet-500/10 text-violet-200">
-                WebSocket
-              </Badge>
-              <Badge className="border-amber-400/20 bg-amber-500/10 text-amber-200">
-                AI CCTV
-              </Badge>
-              <Badge className="border-emerald-400/20 bg-emerald-500/10 text-emerald-200">
-                Simulation
-              </Badge>
+              <Badge className="border-cyan-400/20 bg-cyan-500/10 text-cyan-200">MQTT</Badge>
+              <Badge className="border-violet-400/20 bg-violet-500/10 text-violet-200">WebSocket</Badge>
+              <Badge className="border-amber-400/20 bg-amber-500/10 text-amber-200">AI CCTV</Badge>
+              <Badge className="border-emerald-400/20 bg-emerald-500/10 text-emerald-200">Simulation</Badge>
             </div>
           </div>
 
@@ -595,6 +615,13 @@ export default function Page() {
                   Open Alerts
                 </span>
                 <span className="font-semibold">{summary?.alerts_open || 0}</span>
+              </div>
+
+              <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                <span className="text-slate-300">Simulator State</span>
+                <Badge className={simulationRunning ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200' : 'border-white/10 text-slate-200'}>
+                  {simulationRunning ? 'running' : 'idle'}
+                </Badge>
               </div>
             </div>
 
@@ -652,9 +679,7 @@ export default function Page() {
                     No active alerts. The chute network is stable.
                   </div>
                 ) : (
-                  alertList.slice(0, 8).map((alert) => (
-                    <AlertItem key={alert.id} alert={alert} onAck={onAck} />
-                  ))
+                  alertList.slice(0, 8).map((alert) => <AlertItem key={alert.id} alert={alert} onAck={onAck} />)
                 )}
               </div>
             </div>
@@ -672,9 +697,7 @@ export default function Page() {
                     No devices discovered yet.
                   </div>
                 ) : (
-                  deviceList.map((device) => (
-                    <DeviceCard key={device.id || device.device_id} device={device} />
-                  ))
+                  deviceList.map((device) => <DeviceCard key={device.id || device.device_id} device={device} />)
                 )}
               </div>
             </div>
@@ -694,9 +717,7 @@ export default function Page() {
                     Waiting for realtime events...
                   </div>
                 ) : (
-                  socketEvents.map((item, index) => (
-                    <TimelineEvent key={index} item={item} />
-                  ))
+                  socketEvents.map((item, index) => <TimelineEvent key={index} item={item} />)
                 )}
               </div>
             </div>
@@ -727,24 +748,37 @@ export default function Page() {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-xs uppercase tracking-[0.22em] text-slate-500">
-                    Room Code
-                  </label>
-                  <input
-                    value={simulationRoom}
-                    onChange={(e) => setSimulationRoom(e.target.value)}
-                    className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400/40"
-                    placeholder="CHR_01"
-                  />
+                  <label className="text-xs uppercase tracking-[0.22em] text-slate-500">Room Code</label>
+                  {roomList.length > 0 ? (
+                    <select
+                      value={simulationRoom}
+                      onChange={(event) => setSimulationRoom(event.target.value)}
+                      className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none focus:border-cyan-400/40"
+                    >
+                      {roomList.map((room) => (
+                        <option
+                          key={room.id || room.room_id || room.room_code}
+                          value={room.room_code || room.room_id}
+                        >
+                          {(room.room_code || room.room_id || 'Room') + (room.name ? ` - ${room.name}` : '')}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={simulationRoom}
+                      onChange={(event) => setSimulationRoom(event.target.value)}
+                      className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400/40"
+                      placeholder="CHR_01"
+                    />
+                  )}
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-xs uppercase tracking-[0.22em] text-slate-500">
-                    Event Type
-                  </label>
+                  <label className="text-xs uppercase tracking-[0.22em] text-slate-500">Event Type</label>
                   <select
                     value={simulationEvent}
-                    onChange={(e) => setSimulationEvent(e.target.value)}
+                    onChange={(event) => setSimulationEvent(event.target.value)}
                     className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none focus:border-cyan-400/40"
                   >
                     <option value="heartbeat">Heartbeat</option>
@@ -753,6 +787,7 @@ export default function Page() {
                     <option value="blockage">Blockage</option>
                     <option value="overflow">Overflow</option>
                     <option value="leak">Leak</option>
+                    <option value="motion">Motion</option>
                     <option value="garbage_left">Garbage Left</option>
                     <option value="misuse">Misuse</option>
                   </select>
@@ -763,9 +798,11 @@ export default function Page() {
                     callSimulation('/emit', {
                       room_code: simulationRoom,
                       event_type: simulationEvent,
-                      severity: ['blockage', 'overflow', 'leak', 'misuse', 'door_prolonged_open'].includes(simulationEvent)
+                      severity: ['blockage', 'overflow', 'leak', 'misuse', 'door_prolonged_open', 'garbage_left'].includes(simulationEvent)
                         ? 'high'
-                        : 'medium',
+                        : simulationEvent === 'heartbeat'
+                          ? 'info'
+                          : 'medium',
                     })
                   }
                   className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-cyan-400/20 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100 hover:bg-cyan-500/15"
@@ -784,26 +821,30 @@ export default function Page() {
               <SectionHeader
                 icon={MapPinned}
                 title="Room Coverage"
-                subtitle="Rooms inferred from connected devices and recent alerts."
+                subtitle="Seeded chute rooms with live device and alert awareness."
               />
 
               <div className="space-y-3">
-                {liveRooms.length === 0 ? (
+                {roomList.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-6 text-center text-slate-400">
                     No rooms detected.
                   </div>
                 ) : (
-                  liveRooms.slice(0, 6).map((room, idx) => (
+                  roomList.slice(0, 6).map((room, index) => (
                     <div
-                      key={`${room.room_id}-${idx}`}
+                      key={`${room.id || room.room_id || room.room_code}-${index}`}
                       className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3"
                     >
                       <div>
-                        <div className="font-medium text-white">{room.room_id || 'Unknown Room'}</div>
-                        <div className="text-xs text-slate-500">PoE node assigned</div>
+                        <div className="font-medium text-white">{room.room_code || room.room_id || 'Unknown Room'}</div>
+                        <div className="text-xs text-slate-500">
+                          {room.name || 'Chute room'}
+                          {room.building_code && room.floor_level ? ` | ${room.building_code} / Level ${room.floor_level}` : ''}
+                        </div>
                       </div>
-                      <Badge className="border-white/10 text-slate-200">
-                        Live
+                      <Badge className={roomStatusStyles(room.status)}>
+                        {formatEventLabel(room.status || 'normal')}
+                        {room.open_alert_count ? ` (${room.open_alert_count})` : ''}
                       </Badge>
                     </div>
                   ))

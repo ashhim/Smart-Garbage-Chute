@@ -43,6 +43,10 @@ class Room(Base, TimestampMixin):
     zone: Mapped[str] = mapped_column(String(100), default="chute-room")
     floor = relationship("Floor", back_populates="rooms")
     devices = relationship("Device", back_populates="room", cascade="all, delete-orphan")
+    sensor_events = relationship("SensorEvent", back_populates="room", cascade="all, delete-orphan")
+    alerts = relationship("Alert", back_populates="room", cascade="all, delete-orphan")
+    ai_events = relationship("AiEvent", back_populates="room", cascade="all, delete-orphan")
+    maintenance_logs = relationship("MaintenanceLog", back_populates="room", cascade="all, delete-orphan")
 
 class Device(Base, TimestampMixin):
     __tablename__ = "devices"
@@ -54,6 +58,7 @@ class Device(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(50), default="online")
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     room = relationship("Room", back_populates="devices")
+    sensor_events = relationship("SensorEvent", back_populates="device")
 
 class SensorEvent(Base, TimestampMixin):
     __tablename__ = "sensor_events"
@@ -63,6 +68,8 @@ class SensorEvent(Base, TimestampMixin):
     event_type: Mapped[str] = mapped_column(String(80), index=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     severity: Mapped[str] = mapped_column(String(20), default="info")
+    room = relationship("Room", back_populates="sensor_events")
+    device = relationship("Device", back_populates="sensor_events")
 
 class Alert(Base, TimestampMixin):
     __tablename__ = "alerts"
@@ -75,6 +82,7 @@ class Alert(Base, TimestampMixin):
     acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
     acknowledged_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    room = relationship("Room", back_populates="alerts")
 
 class FirmwareVersion(Base, TimestampMixin):
     __tablename__ = "firmware_versions"
@@ -95,6 +103,7 @@ class OtaJob(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(30), default="queued")
     progress: Mapped[int] = mapped_column(Integer, default=0)
     requested_by: Mapped[str] = mapped_column(String(255), default="system")
+    logs = relationship("OtaLog", back_populates="ota_job", cascade="all, delete-orphan")
 
 class OtaLog(Base, TimestampMixin):
     __tablename__ = "ota_logs"
@@ -103,6 +112,8 @@ class OtaLog(Base, TimestampMixin):
     room_id: Mapped[int | None] = mapped_column(ForeignKey("rooms.id", ondelete="SET NULL"), nullable=True)
     level: Mapped[str] = mapped_column(String(20), default="info")
     message: Mapped[str] = mapped_column(Text)
+    ota_job = relationship("OtaJob", back_populates="logs")
+    room = relationship("Room")
 
 class Notification(Base, TimestampMixin):
     __tablename__ = "notifications"
@@ -123,6 +134,7 @@ class AiEvent(Base, TimestampMixin):
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     snapshot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    room = relationship("Room", back_populates="ai_events")
 
 class MaintenanceLog(Base, TimestampMixin):
     __tablename__ = "maintenance_logs"
@@ -131,6 +143,7 @@ class MaintenanceLog(Base, TimestampMixin):
     issue: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(30), default="open")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    room = relationship("Room", back_populates="maintenance_logs")
 
 class AuditLog(Base, TimestampMixin):
     __tablename__ = "audit_logs"

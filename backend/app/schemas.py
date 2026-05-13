@@ -351,12 +351,23 @@ class AuditLogOut(BaseModel):
 
 
 class SimulationNodeCreate(BaseModel):
-    node_id: str
+    node_id: str | None = None
     room_id: int | None = None
     room_code: str | None = None
     label: str | None = None
     sensor_types: list[str] = Field(default_factory=list)
     notes: str | None = None
+    auto_mode: bool = False
+
+
+class SimulationNodeUpdate(BaseModel):
+    room_id: int | None = None
+    room_code: str | None = None
+    label: str | None = None
+    sensor_types: list[str] | None = None
+    notes: str | None = None
+    auto_mode: bool | None = None
+    paused: bool | None = None
 
 
 class SimulationNodeRegisterRequest(BaseModel):
@@ -364,6 +375,8 @@ class SimulationNodeRegisterRequest(BaseModel):
     room_code: str | None = None
     device_type: str = "esp32-s3-poe-sim"
     firmware_version: str = "1.2.1"
+    official_device_id: str | None = None
+    notes: str | None = None
 
 
 class SimulationNodeEmitRequest(BaseModel):
@@ -373,18 +386,70 @@ class SimulationNodeEmitRequest(BaseModel):
     payload: dict = Field(default_factory=dict)
 
 
+class SimulationNodeApprovalRequest(BaseModel):
+    official_device_id: str = Field(min_length=3)
+    room_id: int | None = None
+    room_code: str | None = None
+    device_type: str = "esp32-s3-poe"
+    firmware_version: str = "1.2.1"
+    notes: str | None = None
+
+
+class SimulationNodeDecisionRequest(BaseModel):
+    notes: str | None = None
+
+
 class SimulationNodeOut(BaseModel):
     id: int
     node_id: str
     label: str
+    draft_reference: str
     room_id: int | None = None
     room_code: str | None = None
     room_name: str | None = None
     sensor_types: list[str] = Field(default_factory=list)
     status: str
+    approval_status: str
+    auto_mode: bool = False
+    paused: bool = False
     linked_device_id: int | None = None
     linked_device_identifier: str | None = None
+    official_device_id: str | None = None
     notes: str | None = None
     last_event_type: str | None = None
+    last_payload: dict = Field(default_factory=dict)
+    submitted_for_approval_at: datetime | None = None
+    approved_at: datetime | None = None
+    approved_by: str | None = None
+    rejected_at: datetime | None = None
+    rejected_by: str | None = None
+    decision_notes: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class AccessRequestCreate(BaseModel):
+    email: str
+    full_name: str
+    requested_role: str = "viewer"
+    justification: str | None = None
+
+
+class AccessRequestDecision(BaseModel):
+    status: str = Field(pattern="^(pending|approved|rejected)$")
+    reviewer_notes: str | None = None
+
+
+class AccessRequestOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    full_name: str
+    requested_role: str
+    justification: str | None = None
+    status: str
+    reviewer_notes: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    created_at: datetime

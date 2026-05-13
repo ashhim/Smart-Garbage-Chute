@@ -5,10 +5,13 @@ import useSWR from 'swr';
 import {
   Bot,
   Cpu,
+  PauseCircle,
   PlayCircle,
   Send,
+  ShieldCheck,
   SquareTerminal,
   TestTube2,
+  Trash2,
 } from 'lucide-react';
 
 import { AuthForm } from '../components/auth-form';
@@ -69,13 +72,22 @@ function TextInput({ value, onChange, placeholder }) {
   );
 }
 
+function Badge({ children }) {
+  return (
+    <span className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] uppercase tracking-[0.14em] text-slate-200">
+      {children}
+    </span>
+  );
+}
+
 export default function InjectionPage() {
   const session = usePortalSession(['system_admin', 'facility_admin']);
   const [statusMessage, setStatusMessage] = useState('');
   const [nodeForm, setNodeForm] = useState({
-    node_id: '',
     label: '',
     room_code: '',
+    notes: '',
+    auto_mode: false,
     sensor_types: SENSOR_OPTIONS.map((option) => option.value),
   });
   const [eventSelections, setEventSelections] = useState({});
@@ -119,7 +131,7 @@ export default function InjectionPage() {
     return (
       <AuthForm
         title="ESP32 Node Injection Website"
-        subtitle="Internal test surface for simulated ESP32 node creation, room assignment, realistic sensor emission, and registration into the live monitoring system."
+        subtitle="Internal test surface for staged ESP32 draft creation, realistic sensor emission, and admin-gated activation into the live monitoring system."
         helper="Facility administrators and system administrators can access this surface."
         authError={session.authError}
         onLogin={session.login}
@@ -135,7 +147,7 @@ export default function InjectionPage() {
   return (
     <PortalShell
       title="ESP32 Node Injection And Simulation"
-      subtitle="Internal test website for staged node creation, realistic telemetry emission, and room-linked registration."
+      subtitle="Internal test website for draft-only node creation, per-node telemetry emission, and approval handoff."
       section="Node Injection Website"
       currentPath="/injection"
       session={session}
@@ -149,19 +161,14 @@ export default function InjectionPage() {
       <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
         <SectionCard
           icon={Bot}
-          title="Create Simulation Node"
-          subtitle="Assign a unique node ID, room, and sensor set without touching live device inventory."
+          title="Create Pending Draft"
+          subtitle="Create a simulated ESP32 draft only. The official node ID is generated later in the admin portal."
         >
           <div className="grid gap-3">
             <TextInput
-              value={nodeForm.node_id}
-              onChange={(value) => setNodeForm((current) => ({ ...current, node_id: value }))}
-              placeholder="Node ID"
-            />
-            <TextInput
               value={nodeForm.label}
               onChange={(value) => setNodeForm((current) => ({ ...current, label: value }))}
-              placeholder="Display label"
+              placeholder="Draft label"
             />
             <select
               value={nodeForm.room_code}
@@ -177,6 +184,21 @@ export default function InjectionPage() {
                 </option>
               ))}
             </select>
+            <TextInput
+              value={nodeForm.notes}
+              onChange={(value) => setNodeForm((current) => ({ ...current, notes: value }))}
+              placeholder="Draft notes"
+            />
+            <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200">
+              <input
+                type="checkbox"
+                checked={nodeForm.auto_mode}
+                onChange={(event) =>
+                  setNodeForm((current) => ({ ...current, auto_mode: event.target.checked }))
+                }
+              />
+              <span>Enable per-node auto mode</span>
+            </label>
           </div>
 
           <div className="mt-4 grid gap-2 sm:grid-cols-2">
@@ -213,38 +235,38 @@ export default function InjectionPage() {
                     method: 'POST',
                     body: nodeForm,
                   }),
-                `Created simulation node ${nodeForm.node_id}.`
+                'Created pending draft node.'
               )
             }
             className="mt-5 inline-flex items-center gap-2 rounded-2xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 hover:bg-cyan-300"
           >
             <Cpu className="h-4 w-4" />
-            Create Node
+            Create Draft
           </button>
         </SectionCard>
 
         <SectionCard
           icon={SquareTerminal}
-          title="Node Actions"
-          subtitle="Register nodes into the main system and emit realistic test payloads."
+          title="Per-Node Controls"
+          subtitle="Emit realistic payloads, pause or resume draft behavior, and submit drafts for admin approval."
         >
           <div className="space-y-4">
             {(Array.isArray(nodes.data) ? nodes.data : []).map((node) => (
               <div key={node.node_id} className="rounded-3xl border border-white/10 bg-white/5 p-5">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <div className="text-lg font-semibold text-white">{node.node_id}</div>
+                    <div className="text-lg font-semibold text-white">{node.label || 'Pending Node Draft'}</div>
                     <div className="mt-1 text-sm text-slate-400">
-                      {node.label} | {node.room_code || 'Unassigned room'} | {node.status}
+                      Draft reference {node.draft_reference} | {node.room_code || 'Unassigned room'}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Badge>{node.approval_status || 'draft'}</Badge>
+                      <Badge>{node.status || 'draft'}</Badge>
+                      {node.official_device_id ? <Badge>official {node.official_device_id}</Badge> : null}
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       {(node.sensor_types || []).map((sensor) => (
-                        <span
-                          key={sensor}
-                          className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] uppercase tracking-[0.14em] text-slate-200"
-                        >
-                          {sensor}
-                        </span>
+                        <Badge key={sensor}>{sensor}</Badge>
                       ))}
                     </div>
                   </div>
@@ -254,27 +276,73 @@ export default function InjectionPage() {
                       onClick={() =>
                         runAction(
                           () =>
-                            session.request(`/injection/nodes/${node.node_id}/register`, {
-                              method: 'POST',
-                              body: { room_code: node.room_code },
+                            session.request(`/injection/nodes/${node.node_id}`, {
+                              method: 'PATCH',
+                              body: { paused: !node.paused },
                             }),
-                          `Registered ${node.node_id} into the main system.`
+                          `${node.paused ? 'Resumed' : 'Paused'} ${node.draft_reference}.`
+                        )
+                      }
+                      className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white hover:bg-white/10"
+                    >
+                      {node.paused ? (
+                        <span className="inline-flex items-center gap-2">
+                          <PlayCircle className="h-4 w-4" />
+                          Resume
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-2">
+                          <PauseCircle className="h-4 w-4" />
+                          Pause
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      onClick={() =>
+                        runAction(
+                          () =>
+                            session.request(`/injection/nodes/${node.node_id}`, {
+                              method: 'PATCH',
+                              body: { auto_mode: !node.auto_mode },
+                            }),
+                          `${node.auto_mode ? 'Disabled' : 'Enabled'} auto mode for ${node.draft_reference}.`
                         )
                       }
                       className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100 hover:bg-emerald-500/15"
                     >
-                      Register By Node ID
+                      {node.auto_mode ? 'Disable Auto' : 'Enable Auto'}
+                    </button>
+                    <button
+                      onClick={() =>
+                        runAction(
+                          () =>
+                            session.request(`/injection/nodes/${node.node_id}/submit-approval`, {
+                              method: 'POST',
+                              body: { notes: node.notes || '' },
+                            }),
+                          `Submitted ${node.draft_reference} for admin approval.`
+                        )
+                      }
+                      className="rounded-2xl border border-cyan-400/20 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-100 hover:bg-cyan-500/15"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <ShieldCheck className="h-4 w-4" />
+                        Submit For Approval
+                      </span>
                     </button>
                     <button
                       onClick={() =>
                         runAction(
                           () => session.request(`/injection/nodes/${node.node_id}`, { method: 'DELETE' }),
-                          `Deleted simulation node ${node.node_id}.`
+                          `Deleted draft ${node.draft_reference}.`
                         )
                       }
                       className="rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 hover:bg-rose-500/15"
                     >
-                      Delete
+                      <span className="inline-flex items-center gap-2">
+                        <Trash2 className="h-4 w-4" />
+                        Delete
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -308,7 +376,7 @@ export default function InjectionPage() {
                               payload: {},
                             },
                           }),
-                        `Emitted ${selectedEvent(node.node_id)} for ${node.node_id}.`
+                        `Emitted ${selectedEvent(node.node_id)} for ${node.draft_reference}.`
                       )
                     }
                     className="inline-flex items-center justify-center gap-2 rounded-2xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 hover:bg-cyan-300"
@@ -329,7 +397,7 @@ export default function InjectionPage() {
                               method: 'POST',
                               body: { event_type: eventType, payload: {} },
                             }),
-                          `Injected ${eventType} for ${node.node_id}.`
+                          `Injected ${eventType} for ${node.draft_reference}.`
                         )
                       }
                       className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white hover:bg-white/10"
@@ -343,7 +411,7 @@ export default function InjectionPage() {
 
             {!Array.isArray(nodes.data) || nodes.data.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-6 text-sm text-slate-400">
-                No simulation nodes staged yet.
+                No draft nodes staged yet.
               </div>
             ) : null}
           </div>
@@ -354,36 +422,37 @@ export default function InjectionPage() {
         <SectionCard
           icon={TestTube2}
           title="Realistic Payload Model"
-          subtitle="Event generation stays aligned to current backend contracts."
+          subtitle="Event generation remains aligned to the current backend contracts."
         >
           <div className="space-y-3 text-sm leading-7 text-slate-300">
             <p>`blockage` and `overflow` use ultrasonic or IR semantics with room-linked telemetry.</p>
             <p>`door_open` and `door_prolonged_open` map to the magnetic door contact contract.</p>
-            <p>`leak` maps to the floor liquid sensor and is treated as urgent.</p>
-            <p>`motion`, `garbage_left`, and `misuse` emit AI-like room events.</p>
+            <p>`leak` maps to the floor liquid sensor and remains urgent for cleaning response.</p>
+            <p>`motion`, `garbage_left`, and `misuse` emit AI-like room events without creating live hardware records.</p>
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          icon={ShieldCheck}
+          title="Approval Boundary"
+          subtitle="Drafts stay isolated until the admin portal activates them."
+        >
+          <div className="space-y-3 text-sm leading-7 text-slate-300">
+            <p>This injection surface never assigns the final ESP32 device ID.</p>
+            <p>Submitting for approval moves the draft into the admin queue for official node-ID generation and room activation.</p>
+            <p>The live device registry only changes after an admin approval action.</p>
           </div>
         </SectionCard>
 
         <SectionCard
           icon={PlayCircle}
-          title="Main-System Registration"
-          subtitle="Nodes created here can be registered into the operational system by node ID."
+          title="Operational Safety"
+          subtitle="Testing stays manual by default, with optional per-node automation."
         >
           <div className="space-y-3 text-sm leading-7 text-slate-300">
-            <p>Registration creates or updates a room-linked device record using the simulation node ID as the device ID.</p>
-            <p>The main monitoring website will then resolve the node through the existing `/devices`, `/rooms`, and alert flows without contract changes.</p>
-          </div>
-        </SectionCard>
-
-        <SectionCard
-          icon={SquareTerminal}
-          title="Safety Boundary"
-          subtitle="Test tooling is isolated from the control-room dashboard."
-        >
-          <div className="space-y-3 text-sm leading-7 text-slate-300">
-            <p>Simulation node records are stored separately from the live device registry until explicitly registered.</p>
-            <p>This surface never exposes user management or admin account controls.</p>
-            <p>Operational monitoring remains in the main website without form clutter.</p>
+            <p>Each draft node can be paused or resumed independently.</p>
+            <p>Per-node auto mode is optional and isolated to the specific draft.</p>
+            <p>The main monitoring website stays free of draft creation controls and test-only forms.</p>
           </div>
         </SectionCard>
       </div>

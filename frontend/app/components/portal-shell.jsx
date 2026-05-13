@@ -2,7 +2,7 @@
 
 import { Loader2, LogOut, ShieldAlert } from 'lucide-react';
 
-import { roleLabel } from '../lib/roles';
+import { ADMIN_PORTAL_ROLES, roleLabel, SIMULATION_ROLES } from '../lib/roles';
 
 function NavLink({ href, label, active }) {
   return (
@@ -58,6 +58,10 @@ export function PortalShell({
   session,
   children,
 }) {
+  const role = session.user?.role;
+  const canOpenAdmin = ADMIN_PORTAL_ROLES.has(role);
+  const canOpenInjection = SIMULATION_ROLES.has(role);
+
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(15,23,42,0.82),_rgba(2,6,23,1)_50%)] text-white">
       <header className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/80 backdrop-blur-xl">
@@ -88,8 +92,12 @@ export function PortalShell({
 
         <div className="mx-auto flex max-w-7xl flex-wrap gap-2 px-5 pb-4">
           <NavLink href="/" label="Monitoring" active={currentPath === '/'} />
-          <NavLink href="/admin" label="Admin" active={currentPath === '/admin'} />
-          <NavLink href="/injection" label="Node Injection" active={currentPath === '/injection'} />
+          {canOpenAdmin ? (
+            <NavLink href="/admin" label="Admin" active={currentPath === '/admin'} />
+          ) : null}
+          {canOpenInjection ? (
+            <NavLink href="/injection" label="Node Injection" active={currentPath === '/injection'} />
+          ) : null}
         </div>
       </header>
 

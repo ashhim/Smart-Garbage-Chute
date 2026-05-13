@@ -17,6 +17,19 @@ class User(Base, TimestampMixin):
     role: Mapped[str] = mapped_column(String(50), default="viewer")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+
+class AccessRequest(Base, TimestampMixin):
+    __tablename__ = "access_requests"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    full_name: Mapped[str] = mapped_column(String(255))
+    requested_role: Mapped[str] = mapped_column(String(50), default="viewer")
+    justification: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    reviewer_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
 class Building(Base, TimestampMixin):
     __tablename__ = "buildings"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

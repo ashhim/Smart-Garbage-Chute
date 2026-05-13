@@ -107,8 +107,9 @@ function SelectInput({ value, onChange, options }) {
 }
 
 export default function AdminPage() {
-  const session = usePortalSession(['system_admin']);
+  const session = usePortalSession(['system_admin', 'facility_admin']);
   const [statusMessage, setStatusMessage] = useState('');
+  const [approvalInputs, setApprovalInputs] = useState({});
 
   const [userForm, setUserForm] = useState({
     email: '',
@@ -142,9 +143,16 @@ export default function AdminPage() {
     firmware_version: '1.2.1',
   });
 
+  const isSystemAdmin = session.user?.role === 'system_admin';
+
   const swrOptions = { refreshInterval: 8000 };
-  const roles = useSWR(session.token ? apiUrl('/admin/roles') : null, session.fetcher, swrOptions);
-  const users = useSWR(session.token ? apiUrl('/admin/users') : null, session.fetcher, swrOptions);
+  const roles = useSWR(isSystemAdmin && session.token ? apiUrl('/admin/roles') : null, session.fetcher, swrOptions);
+  const users = useSWR(isSystemAdmin && session.token ? apiUrl('/admin/users') : null, session.fetcher, swrOptions);
+  const accessRequests = useSWR(
+    isSystemAdmin && session.token ? apiUrl('/admin/access-requests') : null,
+    session.fetcher,
+    swrOptions
+  );
   const buildings = useSWR(session.token ? apiUrl('/buildings') : null, session.fetcher, swrOptions);
   const floors = useSWR(session.token ? apiUrl('/floors') : null, session.fetcher, swrOptions);
   const rooms = useSWR(session.token ? apiUrl('/rooms') : null, session.fetcher, swrOptions);
@@ -153,9 +161,14 @@ export default function AdminPage() {
   const otaJobs = useSWR(session.token ? apiUrl('/ota/jobs') : null, session.fetcher, swrOptions);
   const alerts = useSWR(session.token ? apiUrl('/alerts') : null, session.fetcher, swrOptions);
   const auditLogs = useSWR(session.token ? apiUrl('/admin/audit-logs') : null, session.fetcher, swrOptions);
+  const nodeDrafts = useSWR(session.token ? apiUrl('/admin/node-drafts') : null, session.fetcher, swrOptions);
 
   const roleOptions = useMemo(
-    () => (Array.isArray(roles.data) ? roles.data : []).map((role) => ({ value: role.value, label: role.label })),
+    () =>
+      (Array.isArray(roles.data) ? roles.data : []).map((role) => ({
+        value: role.value,
+        label: role.label,
+      })),
     [roles.data]
   );
   const buildingOptions = useMemo(
@@ -194,6 +207,7 @@ export default function AdminPage() {
   const refreshAll = () =>
     Promise.all([
       users.mutate(),
+      accessRequests.mutate(),
       buildings.mutate(),
       floors.mutate(),
       rooms.mutate(),
@@ -202,7 +216,25 @@ export default function AdminPage() {
       otaJobs.mutate(),
       alerts.mutate(),
       auditLogs.mutate(),
+      nodeDrafts.mutate(),
     ]);
+
+  function draftField(nodeId, field, fallback = '') {
+    return approvalInputs[nodeId]?.[field] ?? fallback;
+  }
+
+  function updateDraftField(nodeId, field, value) {
+    setApprovalInputs((current) => ({
+      ...current,
+      [nodeId]: {
+        official_device_id: current[nodeId]?.official_device_id || '',
+        firmware_version: current[nodeId]?.firmware_version || '1.2.1',
+        notes: current[nodeId]?.notes || '',
+        ...current[nodeId],
+        [field]: value,
+      },
+    }));
+  }
 
   async function runAction(action, successMessage) {
     try {
@@ -256,76 +288,140 @@ export default function AdminPage() {
           title="Accounts And Roles"
           subtitle="Create accounts, assign roles, and control user access."
         >
-          <div className="grid gap-3 md:grid-cols-2">
-            <TextInput value={userForm.email} onChange={(value) => setUserForm((current) => ({ ...current, email: value }))} placeholder="Email" />
-            <TextInput value={userForm.full_name} onChange={(value) => setUserForm((current) => ({ ...current, full_name: value }))} placeholder="Full name" />
-            <TextInput value={userForm.password} onChange={(value) => setUserForm((current) => ({ ...current, password: value }))} placeholder="Password" type="password" />
-            <SelectInput value={userForm.role} onChange={(value) => setUserForm((current) => ({ ...current, role: value }))} options={roleOptions} />
-          </div>
-          <button
-            onClick={() =>
-              runAction(
-                () => session.request('/admin/users', { method: 'POST', body: userForm }),
-                `Created user ${userForm.email}.`
-              )
-            }
-            className="mt-4 rounded-2xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 hover:bg-cyan-300"
-          >
-            Create Account
-          </button>
+          {isSystemAdmin ? (
+            <>
+              <div className="grid gap-3 md:grid-cols-2">
+                <TextInput value={userForm.email} onChange={(value) => setUserForm((current) => ({ ...current, email: value }))} placeholder="Email" />
+                <TextInput value={userForm.full_name} onChange={(value) => setUserForm((current) => ({ ...current, full_name: value }))} placeholder="Full name" />
+                <TextInput value={userForm.password} onChange={(value) => setUserForm((current) => ({ ...current, password: value }))} placeholder="Password" type="password" />
+                <SelectInput
+                  value={userForm.role}
+                  onChange={(value) => setUserForm((current) => ({ ...current, role: value }))}
+                  options={roleOptions.length ? roleOptions : [{ value: 'viewer', label: 'Viewer' }]}
+                />
+              </div>
+              <button
+                onClick={() =>
+                  runAction(
+                    () => session.request('/admin/users', { method: 'POST', body: userForm }),
+                    `Created user ${userForm.email}.`
+                  )
+                }
+                className="mt-4 rounded-2xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 hover:bg-cyan-300"
+              >
+                Create Account
+              </button>
 
-          <div className="mt-5">
-            <Table
-              columns={[
-                { key: 'email', label: 'Email' },
-                { key: 'full_name', label: 'Full Name' },
-                {
-                  key: 'role',
-                  label: 'Role',
-                  render: (row) => (
-                    <select
-                      value={row.role}
-                      onChange={(event) =>
-                        runAction(
-                          () =>
-                            session.request(`/admin/users/${row.id}`, {
-                              method: 'PATCH',
-                              body: { role: event.target.value },
-                            }),
-                          `Updated role for ${row.email}.`
-                        )
-                      }
-                      className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-white"
-                    >
-                      {roleOptions.map((role) => (
-                        <option key={role.value} value={role.value}>
-                          {role.label}
-                        </option>
-                      ))}
-                    </select>
-                  ),
-                },
-                {
-                  key: 'actions',
-                  label: 'Actions',
-                  render: (row) => (
-                    <button
-                      onClick={() =>
-                        runAction(
-                          () => session.request(`/admin/users/${row.id}`, { method: 'DELETE' }),
-                          `Deleted user ${row.email}.`
-                        )
-                      }
-                      className="rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs uppercase tracking-[0.14em] text-rose-100"
-                    >
-                      Delete
-                    </button>
-                  ),
-                },
-              ]}
-              rows={Array.isArray(users.data) ? users.data : []}
-            />
-          </div>
+              <div className="mt-5">
+                <Table
+                  columns={[
+                    { key: 'email', label: 'Email' },
+                    { key: 'full_name', label: 'Full Name' },
+                    {
+                      key: 'role',
+                      label: 'Role',
+                      render: (row) => (
+                        <select
+                          value={row.role}
+                          onChange={(event) =>
+                            runAction(
+                              () =>
+                                session.request(`/admin/users/${row.id}`, {
+                                  method: 'PATCH',
+                                  body: { role: event.target.value },
+                                }),
+                              `Updated role for ${row.email}.`
+                            )
+                          }
+                          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-white"
+                        >
+                          {(roleOptions.length ? roleOptions : [{ value: 'viewer', label: 'Viewer' }]).map((role) => (
+                            <option key={role.value} value={role.value}>
+                              {role.label}
+                            </option>
+                          ))}
+                        </select>
+                      ),
+                    },
+                    {
+                      key: 'actions',
+                      label: 'Actions',
+                      render: (row) => (
+                        <button
+                          onClick={() =>
+                            runAction(
+                              () => session.request(`/admin/users/${row.id}`, { method: 'DELETE' }),
+                              `Deleted user ${row.email}.`
+                            )
+                          }
+                          className="rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs uppercase tracking-[0.14em] text-rose-100"
+                        >
+                          Delete
+                        </button>
+                      ),
+                    },
+                  ]}
+                  rows={Array.isArray(users.data) ? users.data : []}
+                />
+              </div>
+
+              <div className="mt-5">
+                <div className="mb-3 text-sm text-slate-400">Access requests and login approvals</div>
+                <Table
+                  columns={[
+                    { key: 'email', label: 'Email' },
+                    { key: 'full_name', label: 'Full Name' },
+                    { key: 'requested_role', label: 'Requested Role' },
+                    { key: 'status', label: 'Status' },
+                    {
+                      key: 'actions',
+                      label: 'Actions',
+                      render: (row) => (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() =>
+                              runAction(
+                                () =>
+                                  session.request(`/admin/access-requests/${row.id}`, {
+                                    method: 'PATCH',
+                                    body: { status: 'approved' },
+                                  }),
+                                `Approved access request for ${row.email}.`
+                              )
+                            }
+                            className="rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-xs uppercase tracking-[0.14em] text-emerald-100"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            onClick={() =>
+                              runAction(
+                                () =>
+                                  session.request(`/admin/access-requests/${row.id}`, {
+                                    method: 'PATCH',
+                                    body: { status: 'rejected' },
+                                  }),
+                                `Rejected access request for ${row.email}.`
+                              )
+                            }
+                            className="rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs uppercase tracking-[0.14em] text-rose-100"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      ),
+                    },
+                  ]}
+                  rows={Array.isArray(accessRequests.data) ? accessRequests.data : []}
+                  emptyLabel="No access requests."
+                />
+              </div>
+            </>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-6 text-sm leading-7 text-slate-300">
+              Facility administrators can review facilities, node drafts, devices, alerts, firmware visibility, OTA activity, and audit history here. Account creation, role assignment, and login-request approval remain restricted to system administrators.
+            </div>
+          )}
         </SectionCard>
 
         <SectionCard
@@ -427,6 +523,88 @@ export default function AdminPage() {
           >
             Register ESP32 Node
           </button>
+        </SectionCard>
+
+        <SectionCard
+          icon={ShieldCheck}
+          title="Draft Node Approval"
+          subtitle="Approve pending injection drafts, generate official node IDs, or reject unsafe drafts before they enter the live system."
+        >
+          <Table
+            columns={[
+              { key: 'draft_reference', label: 'Draft Ref' },
+              { key: 'room_code', label: 'Room' },
+              { key: 'approval_status', label: 'Approval' },
+              { key: 'status', label: 'Runtime' },
+              {
+                key: 'official_device_id',
+                label: 'Official Node ID',
+                render: (row) => (
+                  <TextInput
+                    value={draftField(row.node_id, 'official_device_id', row.official_device_id || '')}
+                    onChange={(value) => updateDraftField(row.node_id, 'official_device_id', value)}
+                    placeholder="ESP32-NEW-01"
+                  />
+                ),
+              },
+              {
+                key: 'actions',
+                label: 'Actions',
+                render: (row) => (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() =>
+                        runAction(
+                          () =>
+                            session.request(`/admin/node-drafts/${row.node_id}/approve`, {
+                              method: 'POST',
+                              body: {
+                                official_device_id: draftField(row.node_id, 'official_device_id', row.official_device_id || ''),
+                                room_code: row.room_code,
+                                firmware_version: draftField(row.node_id, 'firmware_version', '1.2.1'),
+                                notes: draftField(row.node_id, 'notes', ''),
+                              },
+                            }),
+                          `Approved draft ${row.draft_reference}.`
+                        )
+                      }
+                      className="rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-xs uppercase tracking-[0.14em] text-emerald-100"
+                    >
+                      Approve
+                    </button>
+                    <button
+                      onClick={() =>
+                        runAction(
+                          () =>
+                            session.request(`/admin/node-drafts/${row.node_id}/reject`, {
+                              method: 'POST',
+                              body: { notes: draftField(row.node_id, 'notes', '') },
+                            }),
+                          `Rejected draft ${row.draft_reference}.`
+                        )
+                      }
+                      className="rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs uppercase tracking-[0.14em] text-rose-100"
+                    >
+                      Reject
+                    </button>
+                    <button
+                      onClick={() =>
+                        runAction(
+                          () => session.request(`/admin/node-drafts/${row.node_id}`, { method: 'DELETE' }),
+                          `Deleted draft ${row.draft_reference}.`
+                        )
+                      }
+                      className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-[0.14em] text-white"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ),
+              },
+            ]}
+            rows={Array.isArray(nodeDrafts.data) ? nodeDrafts.data : []}
+            emptyLabel="No node drafts staged for approval."
+          />
         </SectionCard>
 
         <SectionCard

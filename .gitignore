@@ -35,6 +35,9 @@ coverage/
 **/ios/Flutter/Flutter.podspec
 **/ios/Flutter/ephemeral/
 
+# Keep Android raw notification assets
+!mobile/android/app/src/main/res/raw/
+
 # =========================================================
 # Python
 # =========================================================
@@ -75,6 +78,9 @@ debug/
 tmp/
 temp/
 .cache/
+
+# Prevent deleting important Android release outputs accidentally
+!mobile/build/app/outputs/flutter-apk/
 
 # =========================================================
 # PlatformIO / Firmware
@@ -139,6 +145,17 @@ recordings/
 # =========================================================
 firmware/build/
 firmware/.pio/
+
+# =========================================================
+# APK / IPA / Generated Mobile Artifacts
+# =========================================================
+*.apk
+*.aab
+*.ipa
+
+# Keep manually exported APKs if needed
+!app-release.apk
+!app-debug.apk
 
 # =========================================================
 # Misc

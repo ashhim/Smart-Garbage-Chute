@@ -16,6 +16,7 @@ export const ACKNOWLEDGE_ROLES = new Set([
 ]);
 
 export const SIMULATION_ROLES = new Set(['system_admin', 'facility_admin']);
+export const ADMIN_PORTAL_ROLES = new Set(['system_admin', 'facility_admin']);
 export const SYSTEM_ADMIN_ROLES = new Set(['system_admin']);
 
 export function roleLabel(role) {

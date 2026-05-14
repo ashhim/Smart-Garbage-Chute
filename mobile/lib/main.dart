@@ -11,7 +11,7 @@ import 'services/notification_service.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await NotificationService.instance.initialize();
+  await NotificationService.instance.initialize(requestPermissions: false);
 
   final apiService = ApiService();
   await apiService.initialize();

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/widgets.dart';
@@ -10,6 +11,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 
+import '../models/alert_view_data.dart';
 import 'api_service.dart';
 
 const String _backgroundAlertTask = 'smart_garbage_alert_sync';
@@ -20,6 +22,7 @@ const String _backgroundImmediateTask = 'smart_garbage_alert_sync_immediate';
 void notificationCallbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     WidgetsFlutterBinding.ensureInitialized();
+    DartPluginRegistrant.ensureInitialized();
     return NotificationService.instance.handleBackgroundAlertSync();
   });
 }
@@ -42,7 +45,7 @@ class NotificationService {
   static const _lastNotifiedAlertIdKey = 'last_notified_alert_id';
   static const _notificationChannelVersionKey =
       'notification_channel_schema_version';
-  static const _notificationChannelVersion = 2;
+  static const _notificationChannelVersion = 3;
   static const _tokenKey = 'auth_token';
   static const _apiBaseKey = ApiService.apiBaseStorageKey;
   static const _duplicateNotificationWindow = Duration(seconds: 12);
@@ -64,10 +67,20 @@ class NotificationService {
   AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
   bool _notificationsInitialized = false;
   bool _backgroundWorkerInitialized = false;
+  DateTime? _lastNotificationPermissionRequestAt;
 
-  Future<void> initialize() async {
-    await _ensureNotificationsInitialized(requestPermissions: true);
+  Future<void> initialize({
+    bool requestPermissions = false,
+  }) async {
+    await _ensureNotificationsInitialized(
+      requestPermissions: requestPermissions,
+    );
     await _ensureBackgroundWorkerInitialized();
+  }
+
+  Future<bool> ensureForegroundNotificationAccess() async {
+    await initialize(requestPermissions: false);
+    return _ensureNotificationAccess(requestIfNeeded: true);
   }
 
   Future<void> _ensureNotificationsInitialized({
@@ -200,7 +213,7 @@ class NotificationService {
       return;
     }
 
-    await initialize();
+    await initialize(requestPermissions: false);
     await _storeBackgroundAccess(token);
     if (token == null || token.isEmpty) {
       await cancelBackgroundMonitoring();
@@ -282,7 +295,7 @@ class NotificationService {
     int? alertId,
     bool showSystemNotification = false,
   }) async {
-    await _ensureNotificationsInitialized(requestPermissions: true);
+    await _ensureNotificationsInitialized(requestPermissions: false);
 
     final urgent = playSiren || _isUrgentSeverity(severity);
     final notificationId =
@@ -295,18 +308,28 @@ class NotificationService {
     );
     final shouldShowSystemNotification =
         showSystemNotification || !_isAppInForeground;
+    final isDuplicateNotification = shouldShowSystemNotification &&
+        _isDuplicateNotification(notificationKey);
+    var notificationPosted = false;
 
-    if (shouldShowSystemNotification &&
-        !_isDuplicateNotification(notificationKey)) {
-      await _showAlertNotification(
-        notificationId: notificationId,
-        title: title,
-        body: body,
-        urgent: urgent,
+    if (shouldShowSystemNotification && !isDuplicateNotification) {
+      final canPostNotifications = await _ensureNotificationAccess(
+        requestIfNeeded: _isAppInForeground,
       );
+      if (canPostNotifications) {
+        notificationPosted = await _showAlertNotification(
+          notificationId: notificationId,
+          title: title,
+          body: body,
+          urgent: urgent,
+        );
+      }
     }
 
-    if (urgent && alertId != null) {
+    final notificationHandledBySystem = shouldShowSystemNotification &&
+        (isDuplicateNotification || notificationPosted);
+
+    if (urgent && alertId != null && notificationHandledBySystem) {
       await _storeLastNotifiedAlertId(alertId);
     }
 
@@ -388,21 +411,25 @@ class NotificationService {
         return true;
       }
 
-      final newestAlert = urgentAlerts.last;
-      final roomCode = newestAlert['room_code']?.toString();
-      final body =
-          newestAlert['message']?.toString() ?? 'Urgent chute room alert';
-      final alertId = _parseAlertId(newestAlert['id']) ??
-          DateTime.now().millisecondsSinceEpoch;
+      var newestAlertId = lastNotifiedAlertId;
+      for (final urgentAlert in urgentAlerts) {
+        final alertId = _parseAlertId(urgentAlert['id']) ??
+            DateTime.now().millisecondsSinceEpoch;
+        final alertViewData = AlertViewData.fromPayload(urgentAlert);
 
-      await _showAlertNotification(
-        notificationId: alertId,
-        title: 'Urgent ${roomCode ?? 'facility'} alert',
-        body: body,
-        urgent: true,
-      );
+        await _showAlertNotification(
+          notificationId: alertId,
+          title: alertViewData.title,
+          body: alertViewData.notificationBody,
+          urgent: true,
+        );
 
-      await prefs.setInt(_lastNotifiedAlertIdKey, alertId);
+        if (alertId > newestAlertId) {
+          newestAlertId = alertId;
+        }
+      }
+
+      await prefs.setInt(_lastNotifiedAlertIdKey, newestAlertId);
       return true;
     } catch (error, stackTrace) {
       debugPrint('Background alert sync error: $error');
@@ -459,7 +486,44 @@ class NotificationService {
     return null;
   }
 
-  Future<void> _showAlertNotification({
+  Future<bool> _ensureNotificationAccess({
+    required bool requestIfNeeded,
+  }) async {
+    if (Platform.isAndroid) {
+      final androidImplementation =
+          _plugin.resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      if (androidImplementation == null) {
+        return true;
+      }
+
+      final notificationsEnabled =
+          await androidImplementation.areNotificationsEnabled();
+      if (notificationsEnabled ?? true) {
+        return true;
+      }
+
+      if (!requestIfNeeded || !_isAppInForeground) {
+        return false;
+      }
+
+      final now = DateTime.now();
+      if (_lastNotificationPermissionRequestAt != null &&
+          now.difference(_lastNotificationPermissionRequestAt!) <
+              const Duration(seconds: 30)) {
+        return false;
+      }
+      _lastNotificationPermissionRequestAt = now;
+
+      return await androidImplementation.requestNotificationsPermission() ??
+          false;
+    }
+
+    await _requestPermissions();
+    return true;
+  }
+
+  Future<bool> _showAlertNotification({
     required int notificationId,
     required String title,
     required String body,
@@ -470,31 +534,43 @@ class NotificationService {
     final channelDescription =
         urgent ? _criticalAlertChannelDescription : _alertChannelDescription;
 
-    await _plugin.show(
-      notificationId,
-      title,
-      body,
-      NotificationDetails(
-        android: AndroidNotificationDetails(
-          channelId,
-          channelName,
-          channelDescription: channelDescription,
-          importance: urgent ? Importance.max : Importance.high,
-          priority: urgent ? Priority.max : Priority.high,
-          category: urgent ? AndroidNotificationCategory.alarm : null,
-          playSound: true,
-          sound: urgent ? _alarmSound : null,
-          audioAttributesUsage: urgent
-              ? AudioAttributesUsage.alarm
-              : AudioAttributesUsage.notification,
+    try {
+      await _plugin.show(
+        notificationId,
+        title,
+        body,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            channelId,
+            channelName,
+            channelDescription: channelDescription,
+            importance: urgent ? Importance.max : Importance.high,
+            priority: urgent ? Priority.max : Priority.high,
+            styleInformation: BigTextStyleInformation(body),
+            category: urgent ? AndroidNotificationCategory.alarm : null,
+            visibility: NotificationVisibility.public,
+            playSound: true,
+            sound: urgent ? _alarmSound : null,
+            ticker: title,
+            enableLights: urgent,
+            channelShowBadge: true,
+            audioAttributesUsage: urgent
+                ? AudioAttributesUsage.alarm
+                : AudioAttributesUsage.notification,
+          ),
+          iOS: const DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+          ),
         ),
-        iOS: const DarwinNotificationDetails(
-          presentAlert: true,
-          presentBadge: true,
-          presentSound: true,
-        ),
-      ),
-    );
+      );
+      return true;
+    } catch (error, stackTrace) {
+      debugPrint('Notification post error: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      return false;
+    }
   }
 
   Future<void> _storeLastNotifiedAlertId(int alertId) async {

@@ -8,6 +8,7 @@ import 'package:timeago/timeago.dart' as timeago;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/alert.dart';
+import '../models/alert_view_data.dart';
 import '../models/user.dart';
 import '../models/room.dart';
 import '../services/api_service.dart';
@@ -69,6 +70,11 @@ class _DashboardScreenState extends State<DashboardScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     NotificationService.instance.setAppLifecycleState(_appLifecycleState);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(
+        NotificationService.instance.ensureForegroundNotificationAccess(),
+      );
+    });
     _connectWebSocket();
     _startFallbackRefreshTimer();
     unawaited(_reloadLiveData(showLoading: true, broadcastToTabs: false));
@@ -95,6 +101,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     NotificationService.instance.setAppLifecycleState(state);
 
     if (!wasForeground && isForeground) {
+      unawaited(
+        NotificationService.instance.ensureForegroundNotificationAccess(),
+      );
       _connectWebSocket(forceReconnect: true);
       _startFallbackRefreshTimer();
       _scheduleLiveRefresh(delay: Duration.zero);
@@ -162,8 +171,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
 
     final type = payload['type']?.toString() ?? 'event';
-    final severity = (payload['severity'] ?? 'info').toString().toLowerCase();
-    final urgent = severity == 'high' || severity == 'critical';
+    final severity = _severityForPayload(payload);
+    final urgent = _isUrgentSeverity(severity);
 
     setState(() {
       _realtimeEvents.insert(0, payload);
@@ -189,20 +198,17 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
 
     if (type == 'alert.created' || type == 'notification') {
-      final title = type == 'notification'
-          ? (payload['title']?.toString() ?? 'Control room notification')
-          : 'New ${severity.toUpperCase()} alert';
-      final body = payload['message']?.toString() ??
-          payload['body']?.toString() ??
-          'Realtime event received';
+      final alertViewData = AlertViewData.fromPayload(payload);
+      final alertId = _extractAlertId(payload);
 
       unawaited(
         NotificationService.instance.showRealtimeAlert(
-          title: title,
-          body: body,
+          title: alertViewData.title,
+          body: alertViewData.notificationBody,
           severity: severity,
           playSiren: urgent,
-          alertId: int.tryParse(payload['id']?.toString() ?? ''),
+          alertId: alertId,
+          showSystemNotification: urgent,
         ),
       );
 
@@ -210,7 +216,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: urgent ? Colors.red.shade700 : null,
-            content: Text(body),
+            content: Text(alertViewData.notificationBody),
           ),
         );
       }
@@ -581,12 +587,9 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _buildUrgentBanner() {
-    final body = _urgentEvent?['message']?.toString() ??
-        _urgentEvent?['body']?.toString() ??
-        'Urgent alert received.';
-    final severity =
-        (_urgentEvent?['severity'] ?? 'high').toString().toUpperCase();
-    final roomCode = _urgentEvent?['room_code']?.toString();
+    final alertViewData = AlertViewData.fromPayload(
+      _urgentEvent ?? const <String, dynamic>{},
+    );
 
     return Card(
       color: Colors.red.shade50,
@@ -601,7 +604,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Urgent Alert - $severity',
+                    alertViewData.title,
                     style: TextStyle(
                       color: Colors.red.shade900,
                       fontWeight: FontWeight.w700,
@@ -616,13 +619,18 @@ class _DashboardScreenState extends State<DashboardScreen>
             ),
             const SizedBox(height: 8),
             Text(
-              body,
+              alertViewData.description,
               style: TextStyle(color: Colors.red.shade900),
             ),
-            if (roomCode != null && roomCode.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              alertViewData.roomLine,
+              style: TextStyle(color: Colors.red.shade800),
+            ),
+            if (alertViewData.deviceLine != null) ...[
               const SizedBox(height: 6),
               Text(
-                'Room: $roomCode',
+                alertViewData.deviceLine!,
                 style: TextStyle(color: Colors.red.shade800),
               ),
             ],
@@ -785,20 +793,33 @@ class _DashboardScreenState extends State<DashboardScreen>
               const Text('No recent alerts.')
             else
               ..._recentAlerts.map(
-                (alert) => ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    alert.severityIcon,
-                    color: alert.severityColor,
-                  ),
-                  title: Text(alert.message),
-                  subtitle: Text(
-                    '${alert.roomLabel} | ${timeago.format(alert.createdAt)}',
-                  ),
-                  trailing: alert.acknowledged
-                      ? const Icon(Icons.check_circle, color: Colors.green)
-                      : Text(alert.severity.toUpperCase()),
-                ),
+                (alert) {
+                  final alertViewData = alert.viewData;
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      alert.severityIcon,
+                      color: alert.severityColor,
+                    ),
+                    title: Text(alertViewData.title),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(alertViewData.description),
+                        Text(alertViewData.roomLine),
+                        if (alertViewData.deviceLine != null)
+                          Text(alertViewData.deviceLine!),
+                        Text(
+                          timeago.format(alert.createdAt),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ],
+                    ),
+                    trailing: alert.acknowledged
+                        ? const Icon(Icons.check_circle, color: Colors.green)
+                        : Text(alert.severity.toUpperCase()),
+                  );
+                },
               ),
           ],
         ),
@@ -921,6 +942,30 @@ class _DashboardScreenState extends State<DashboardScreen>
       return _heartbeatRefreshDebounce;
     }
     return _defaultRefreshDebounce;
+  }
+
+  int? _extractAlertId(Map<String, dynamic> payload) {
+    return int.tryParse(
+      payload['alert_id']?.toString() ?? payload['id']?.toString() ?? '',
+    );
+  }
+
+  String _severityForPayload(Map<String, dynamic> payload) {
+    final severity = payload['severity']?.toString().trim().toLowerCase();
+    if (severity != null && severity.isNotEmpty) {
+      return severity;
+    }
+
+    final title = payload['title']?.toString() ?? '';
+    final match = RegExp(
+      r'^\[(critical|high|medium|low|info)\]',
+      caseSensitive: false,
+    ).firstMatch(title);
+    return match?.group(1)?.toLowerCase() ?? 'info';
+  }
+
+  bool _isUrgentSeverity(String severity) {
+    return severity == 'high' || severity == 'critical';
   }
 
   bool _isForegroundState(AppLifecycleState state) {

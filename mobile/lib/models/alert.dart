@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'alert_view_data.dart';
+
 class Alert {
   Alert({
     required this.id,
@@ -64,6 +66,15 @@ class Alert {
     }
     return '$code - $roomName';
   }
+
+  AlertViewData get viewData => AlertViewData.fromFields(
+        category: category,
+        severity: severity,
+        message: message,
+        roomCode: roomCode,
+        roomName: roomName,
+        deviceId: deviceId,
+      );
 
   Color get severityColor {
     switch (severity.toLowerCase()) {

@@ -126,6 +126,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
             itemCount: alerts.length,
             itemBuilder: (context, index) {
               final alert = alerts[index];
+              final alertViewData = alert.viewData;
               return Card(
                 margin: const EdgeInsets.only(bottom: 12),
                 child: ListTile(
@@ -134,11 +135,14 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     color: alert.severityColor,
                     size: 30,
                   ),
-                  title: Text(alert.message),
+                  title: Text(alertViewData.title),
                   subtitle: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('${alert.roomLabel} | ${alert.category}'),
+                      Text(alertViewData.description),
+                      Text(alertViewData.roomLine),
+                      if (alertViewData.deviceLine != null)
+                        Text(alertViewData.deviceLine!),
                       Text(
                         '${alert.source} | ${timeago.format(alert.createdAt)}',
                         style: const TextStyle(fontSize: 12),

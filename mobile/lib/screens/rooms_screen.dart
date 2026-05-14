@@ -6,7 +6,12 @@ import '../models/room.dart';
 import '../services/api_service.dart';
 
 class RoomsScreen extends StatefulWidget {
-  const RoomsScreen({super.key});
+  const RoomsScreen({
+    super.key,
+    required this.refreshToken,
+  });
+
+  final int refreshToken;
 
   @override
   State<RoomsScreen> createState() => _RoomsScreenState();
@@ -19,6 +24,14 @@ class _RoomsScreenState extends State<RoomsScreen> {
   void initState() {
     super.initState();
     _roomsFuture = _fetchRooms();
+  }
+
+  @override
+  void didUpdateWidget(covariant RoomsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.refreshToken != oldWidget.refreshToken) {
+      _reload();
+    }
   }
 
   Future<List<Room>> _fetchRooms() async {
@@ -41,7 +54,10 @@ class _RoomsScreenState extends State<RoomsScreen> {
       child: FutureBuilder<List<Room>>(
         future: _roomsFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          final rooms = snapshot.data ?? const <Room>[];
+
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              rooms.isEmpty) {
             return const Center(child: CircularProgressIndicator());
           }
 
@@ -64,7 +80,6 @@ class _RoomsScreenState extends State<RoomsScreen> {
             );
           }
 
-          final rooms = snapshot.data ?? const [];
           if (rooms.isEmpty) {
             return ListView(
               physics: const AlwaysScrollableScrollPhysics(),

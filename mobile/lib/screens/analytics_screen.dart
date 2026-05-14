@@ -8,7 +8,12 @@ import '../models/ota_job.dart';
 import '../services/api_service.dart';
 
 class AnalyticsScreen extends StatefulWidget {
-  const AnalyticsScreen({super.key});
+  const AnalyticsScreen({
+    super.key,
+    required this.refreshToken,
+  });
+
+  final int refreshToken;
 
   @override
   State<AnalyticsScreen> createState() => _AnalyticsScreenState();
@@ -21,6 +26,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   void initState() {
     super.initState();
     _dataFuture = _fetchData();
+  }
+
+  @override
+  void didUpdateWidget(covariant AnalyticsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.refreshToken != oldWidget.refreshToken) {
+      _reload();
+    }
   }
 
   Future<_OperationsData> _fetchData() async {
@@ -64,7 +77,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       child: FutureBuilder<_OperationsData>(
         future: _dataFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              snapshot.data == null) {
             return const Center(child: CircularProgressIndicator());
           }
 

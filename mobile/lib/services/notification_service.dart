@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/widgets.dart';
@@ -12,13 +13,14 @@ import 'package:workmanager/workmanager.dart';
 import 'api_service.dart';
 
 const String _backgroundAlertTask = 'smart_garbage_alert_sync';
+const String _backgroundBootstrapTask = 'smart_garbage_alert_sync_bootstrap';
+const String _backgroundImmediateTask = 'smart_garbage_alert_sync_immediate';
 
 @pragma('vm:entry-point')
 void notificationCallbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     WidgetsFlutterBinding.ensureInitialized();
-    await NotificationService.instance.handleBackgroundAlertSync();
-    return true;
+    return NotificationService.instance.handleBackgroundAlertSync();
   });
 }
 
@@ -26,10 +28,29 @@ class NotificationService {
   NotificationService._internal();
 
   static final NotificationService instance = NotificationService._internal();
-  static const _alertChannelId = 'smart-garbage-alerts';
+  static const _alertChannelId = 'smart-garbage-alerts-general-v2';
+  static const _criticalAlertChannelId = 'smart-garbage-alerts-critical-v2';
+  static const _alertChannelName = 'Smart Garbage Alerts';
+  static const _criticalAlertChannelName = 'Smart Garbage Critical Alerts';
+  static const _alertChannelDescription =
+      'Realtime chute room alerts and notifications';
+  static const _criticalAlertChannelDescription =
+      'Critical chute room alerts that require immediate attention';
+  static const _alarmSound = RawResourceAndroidNotificationSound('alaram');
+  static const _backgroundTokenKey = 'background_alert_auth_token';
+  static const _backgroundApiBaseUrlKey = 'background_alert_api_base_url';
   static const _lastNotifiedAlertIdKey = 'last_notified_alert_id';
+  static const _notificationChannelVersionKey =
+      'notification_channel_schema_version';
+  static const _notificationChannelVersion = 2;
   static const _tokenKey = 'auth_token';
   static const _apiBaseKey = ApiService.apiBaseStorageKey;
+  static const _duplicateNotificationWindow = Duration(seconds: 12);
+  static const _legacyChannelIds = <String>[
+    'smart-garbage-alerts',
+    'smart-garbage-alerts-general',
+    'smart-garbage-alerts-critical',
+  ];
 
   factory NotificationService() => instance;
 
@@ -37,12 +58,25 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
   final AudioPlayer _audioPlayer = AudioPlayer();
+  final Map<String, DateTime> _recentNotificationKeys = <String, DateTime>{};
 
   Timer? _sirenTimer;
-  bool _initialized = false;
+  AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
+  bool _notificationsInitialized = false;
+  bool _backgroundWorkerInitialized = false;
 
   Future<void> initialize() async {
-    if (_initialized) {
+    await _ensureNotificationsInitialized(requestPermissions: true);
+    await _ensureBackgroundWorkerInitialized();
+  }
+
+  Future<void> _ensureNotificationsInitialized({
+    required bool requestPermissions,
+  }) async {
+    if (_notificationsInitialized) {
+      if (requestPermissions) {
+        await _requestPermissions();
+      }
       return;
     }
 
@@ -52,25 +86,80 @@ class NotificationService {
     );
 
     await _plugin.initialize(settings);
+    await _createNotificationChannels();
+    await _configureAudioPlayer();
+
+    _notificationsInitialized = true;
+
+    if (requestPermissions) {
+      await _requestPermissions();
+    }
+  }
+
+  Future<void> _ensureBackgroundWorkerInitialized() async {
+    if (_backgroundWorkerInitialized || !_supportsBackgroundAlertSync) {
+      return;
+    }
+
     await Workmanager().initialize(
       notificationCallbackDispatcher,
       isInDebugMode: false,
     );
+    _backgroundWorkerInitialized = true;
+  }
 
-    const channel = AndroidNotificationChannel(
+  Future<void> _createNotificationChannels() async {
+    final androidImplementation = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (androidImplementation == null) {
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final storedVersion = prefs.getInt(_notificationChannelVersionKey) ?? 0;
+    if (storedVersion != _notificationChannelVersion) {
+      for (final channelId in <String>{
+        ..._legacyChannelIds,
+        _alertChannelId,
+        _criticalAlertChannelId,
+      }) {
+        await androidImplementation.deleteNotificationChannel(channelId);
+      }
+    }
+
+    const defaultChannel = AndroidNotificationChannel(
       _alertChannelId,
-      'Smart Garbage Alerts',
-      description: 'Realtime chute room alerts and notifications',
-      importance: Importance.max,
+      _alertChannelName,
+      description: _alertChannelDescription,
+      importance: Importance.high,
       playSound: true,
-      sound: RawResourceAndroidNotificationSound('alaram'),
+      enableVibration: true,
     );
 
-    await _plugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(channel);
+    // Android 8+ binds the sound to the channel the first time it is created.
+    const criticalChannel = AndroidNotificationChannel(
+      _criticalAlertChannelId,
+      _criticalAlertChannelName,
+      description: _criticalAlertChannelDescription,
+      importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
+      sound: _alarmSound,
+      audioAttributesUsage: AudioAttributesUsage.alarm,
+    );
 
+    await androidImplementation.createNotificationChannel(defaultChannel);
+    await androidImplementation.createNotificationChannel(criticalChannel);
+
+    if (storedVersion != _notificationChannelVersion) {
+      await prefs.setInt(
+        _notificationChannelVersionKey,
+        _notificationChannelVersion,
+      );
+    }
+  }
+
+  Future<void> _requestPermissions() async {
     await _plugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
@@ -85,32 +174,103 @@ class NotificationService {
         .resolvePlatformSpecificImplementation<
             MacOSFlutterLocalNotificationsPlugin>()
         ?.requestPermissions(alert: true, badge: true, sound: true);
+  }
 
-    _initialized = true;
+  Future<void> _configureAudioPlayer() async {
+    await _audioPlayer.setPlayerMode(PlayerMode.lowLatency);
+    await _audioPlayer.setReleaseMode(ReleaseMode.stop);
+    await _audioPlayer.setAudioContext(
+      AudioContext(
+        android: const AudioContextAndroid(
+          contentType: AndroidContentType.sonification,
+          usageType: AndroidUsageType.alarm,
+          audioFocus: AndroidAudioFocus.gainTransient,
+        ),
+        iOS: AudioContextIOS(
+          category: AVAudioSessionCategory.playback,
+        ),
+      ),
+    );
   }
 
   Future<void> configureBackgroundMonitoring({
     required String? token,
   }) async {
+    if (!_supportsBackgroundAlertSync) {
+      return;
+    }
+
     await initialize();
+    await _storeBackgroundAccess(token);
     if (token == null || token.isEmpty) {
       await cancelBackgroundMonitoring();
       return;
     }
+
+    final constraints = Constraints(
+      networkType: NetworkType.connected,
+    );
+
+    await Workmanager().registerOneOffTask(
+      _backgroundBootstrapTask,
+      _backgroundAlertTask,
+      initialDelay: const Duration(seconds: 10),
+      existingWorkPolicy: ExistingWorkPolicy.replace,
+      constraints: constraints,
+      backoffPolicy: BackoffPolicy.exponential,
+      backoffPolicyDelay: const Duration(minutes: 1),
+      outOfQuotaPolicy: _expeditedPolicyForDelay(
+        const Duration(seconds: 10),
+      ),
+    );
 
     await Workmanager().registerPeriodicTask(
       _backgroundAlertTask,
       _backgroundAlertTask,
       frequency: const Duration(minutes: 15),
       existingWorkPolicy: ExistingWorkPolicy.replace,
-      initialDelay: const Duration(minutes: 1),
-      constraints: Constraints(
-        networkType: NetworkType.connected,
-      ),
+      initialDelay: const Duration(minutes: 15),
+      constraints: constraints,
+      backoffPolicy: BackoffPolicy.exponential,
+      backoffPolicyDelay: const Duration(minutes: 5),
+    );
+  }
+
+  Future<void> scheduleImmediateBackgroundSync({
+    Duration initialDelay = const Duration(seconds: 15),
+  }) async {
+    if (!_supportsBackgroundAlertSync) {
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString(_backgroundTokenKey);
+    if (token == null || token.isEmpty) {
+      return;
+    }
+
+    await _ensureBackgroundWorkerInitialized();
+
+    await Workmanager().registerOneOffTask(
+      _backgroundImmediateTask,
+      _backgroundAlertTask,
+      existingWorkPolicy: ExistingWorkPolicy.replace,
+      initialDelay: initialDelay,
+      constraints: Constraints(networkType: NetworkType.connected),
+      backoffPolicy: BackoffPolicy.exponential,
+      backoffPolicyDelay: const Duration(minutes: 1),
+      outOfQuotaPolicy: _expeditedPolicyForDelay(initialDelay),
     );
   }
 
   Future<void> cancelBackgroundMonitoring() async {
+    if (!_supportsBackgroundAlertSync) {
+      return;
+    }
+
+    await _clearBackgroundAccess();
+    await Workmanager().cancelByUniqueName(_backgroundImmediateTask);
+    await Workmanager().cancelByUniqueName(_backgroundBootstrapTask);
     await Workmanager().cancelByUniqueName(_backgroundAlertTask);
   }
 
@@ -119,42 +279,44 @@ class NotificationService {
     required String body,
     String severity = 'info',
     bool playSiren = false,
+    int? alertId,
+    bool showSystemNotification = false,
   }) async {
-    await initialize();
+    await _ensureNotificationsInitialized(requestPermissions: true);
 
     final urgent = playSiren || _isUrgentSeverity(severity);
-    final details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        _alertChannelId,
-        'Smart Garbage Alerts',
-        channelDescription: 'Realtime chute room alerts and notifications',
-        importance: urgent ? Importance.max : Importance.high,
-        priority: urgent ? Priority.max : Priority.high,
-        playSound: true,
-        sound:
-            urgent ? const RawResourceAndroidNotificationSound('alaram') : null,
-      ),
-      iOS: const DarwinNotificationDetails(
-        presentAlert: true,
-        presentBadge: true,
-        presentSound: true,
-      ),
+    final notificationId =
+        alertId ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final notificationKey = _buildNotificationKey(
+      alertId: alertId,
+      title: title,
+      body: body,
+      urgent: urgent,
     );
+    final shouldShowSystemNotification =
+        showSystemNotification || !_isAppInForeground;
 
-    await _plugin.show(
-      DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      title,
-      body,
-      details,
-    );
+    if (shouldShowSystemNotification &&
+        !_isDuplicateNotification(notificationKey)) {
+      await _showAlertNotification(
+        notificationId: notificationId,
+        title: title,
+        body: body,
+        urgent: urgent,
+      );
+    }
 
-    if (urgent) {
+    if (urgent && alertId != null) {
+      await _storeLastNotifiedAlertId(alertId);
+    }
+
+    if (urgent && _isAppInForeground) {
       await playUrgentSiren();
     }
   }
 
   Future<void> playUrgentSiren() async {
-    await initialize();
+    await _ensureNotificationsInitialized(requestPermissions: false);
 
     _sirenTimer?.cancel();
     await _audioPlayer.stop();
@@ -171,19 +333,22 @@ class NotificationService {
     await _audioPlayer.stop();
   }
 
-  Future<void> handleBackgroundAlertSync() async {
+  Future<bool> handleBackgroundAlertSync() async {
     try {
-      await initialize();
+      await _ensureNotificationsInitialized(requestPermissions: false);
 
-      final token = await _storage.read(key: _tokenKey);
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString(_backgroundTokenKey) ??
+          await _storage.read(key: _tokenKey);
       if (token == null || token.isEmpty) {
-        return;
+        return true;
       }
 
-      final apiBaseUrl =
-          await _storage.read(key: _apiBaseKey) ?? _buildOverrideApiBaseUrl();
+      final apiBaseUrl = prefs.getString(_backgroundApiBaseUrlKey) ??
+          await _storage.read(key: _apiBaseKey) ??
+          _buildOverrideApiBaseUrl();
       if (apiBaseUrl == null || apiBaseUrl.trim().isEmpty) {
-        return;
+        return true;
       }
       final response = await http.get(
         Uri.parse('${_normalizeApiBaseUrl(apiBaseUrl)}/alerts'),
@@ -191,18 +356,17 @@ class NotificationService {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-      );
+      ).timeout(const Duration(seconds: 8));
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        return;
+        return false;
       }
 
       final decoded = jsonDecode(response.body);
       if (decoded is! List) {
-        return;
+        return false;
       }
 
-      final prefs = await SharedPreferences.getInstance();
       final lastNotifiedAlertId = prefs.getInt(_lastNotifiedAlertIdKey) ?? 0;
 
       final urgentAlerts = decoded
@@ -210,53 +374,40 @@ class NotificationService {
           .map((item) => item.cast<String, dynamic>())
           .where(
             (alert) =>
-                (alert['acknowledged'] as bool? ?? false) == false &&
+                !_isAcknowledged(alert['acknowledged']) &&
                 _isUrgentSeverity((alert['severity'] ?? 'info').toString()) &&
-                ((alert['id'] as num?)?.toInt() ?? 0) > lastNotifiedAlertId,
+                (_parseAlertId(alert['id']) ?? 0) > lastNotifiedAlertId,
           )
           .toList()
         ..sort(
-          (left, right) => ((left['id'] as num?)?.toInt() ?? 0)
-              .compareTo(((right['id'] as num?)?.toInt() ?? 0)),
+          (left, right) => (_parseAlertId(left['id']) ?? 0)
+              .compareTo(_parseAlertId(right['id']) ?? 0),
         );
 
       if (urgentAlerts.isEmpty) {
-        return;
+        return true;
       }
 
       final newestAlert = urgentAlerts.last;
       final roomCode = newestAlert['room_code']?.toString();
       final body =
           newestAlert['message']?.toString() ?? 'Urgent chute room alert';
-      await _plugin.show(
-        (newestAlert['id'] as num?)?.toInt() ??
-            DateTime.now().millisecondsSinceEpoch,
-        'Urgent ${roomCode ?? 'facility'} alert',
-        body,
-        const NotificationDetails(
-          android: AndroidNotificationDetails(
-            _alertChannelId,
-            'Smart Garbage Alerts',
-            channelDescription: 'Realtime chute room alerts and notifications',
-            importance: Importance.max,
-            priority: Priority.max,
-            playSound: true,
-            sound: RawResourceAndroidNotificationSound('alaram'),
-          ),
-          iOS: DarwinNotificationDetails(
-            presentAlert: true,
-            presentBadge: true,
-            presentSound: true,
-          ),
-        ),
+      final alertId = _parseAlertId(newestAlert['id']) ??
+          DateTime.now().millisecondsSinceEpoch;
+
+      await _showAlertNotification(
+        notificationId: alertId,
+        title: 'Urgent ${roomCode ?? 'facility'} alert',
+        body: body,
+        urgent: true,
       );
 
-      await prefs.setInt(
-        _lastNotifiedAlertIdKey,
-        (newestAlert['id'] as num?)?.toInt() ?? lastNotifiedAlertId,
-      );
-    } catch (_) {
-      return;
+      await prefs.setInt(_lastNotifiedAlertIdKey, alertId);
+      return true;
+    } catch (error, stackTrace) {
+      debugPrint('Background alert sync error: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      return false;
     }
   }
 
@@ -268,9 +419,156 @@ class NotificationService {
 
   Future<void> unsubscribeFromTopic(String topic) async {}
 
+  void setAppLifecycleState(AppLifecycleState state) {
+    _appLifecycleState = state;
+  }
+
+  bool get _supportsBackgroundAlertSync => Platform.isAndroid;
+  bool get _isAppInForeground =>
+      _appLifecycleState == AppLifecycleState.resumed;
+
   static bool _isUrgentSeverity(String severity) {
     final normalized = severity.toLowerCase();
     return normalized == 'high' || normalized == 'critical';
+  }
+
+  static bool _isAcknowledged(dynamic value) {
+    if (value is bool) {
+      return value;
+    }
+    if (value is num) {
+      return value != 0;
+    }
+    if (value is String) {
+      final normalized = value.trim().toLowerCase();
+      return normalized == 'true' || normalized == '1';
+    }
+    return false;
+  }
+
+  static int? _parseAlertId(dynamic value) {
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    if (value is String) {
+      return int.tryParse(value);
+    }
+    return null;
+  }
+
+  Future<void> _showAlertNotification({
+    required int notificationId,
+    required String title,
+    required String body,
+    required bool urgent,
+  }) async {
+    final channelId = urgent ? _criticalAlertChannelId : _alertChannelId;
+    final channelName = urgent ? _criticalAlertChannelName : _alertChannelName;
+    final channelDescription =
+        urgent ? _criticalAlertChannelDescription : _alertChannelDescription;
+
+    await _plugin.show(
+      notificationId,
+      title,
+      body,
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          channelId,
+          channelName,
+          channelDescription: channelDescription,
+          importance: urgent ? Importance.max : Importance.high,
+          priority: urgent ? Priority.max : Priority.high,
+          category: urgent ? AndroidNotificationCategory.alarm : null,
+          playSound: true,
+          sound: urgent ? _alarmSound : null,
+          audioAttributesUsage: urgent
+              ? AudioAttributesUsage.alarm
+              : AudioAttributesUsage.notification,
+        ),
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _storeLastNotifiedAlertId(int alertId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final currentValue = prefs.getInt(_lastNotifiedAlertIdKey) ?? 0;
+    if (alertId > currentValue) {
+      await prefs.setInt(_lastNotifiedAlertIdKey, alertId);
+    }
+  }
+
+  Future<void> _storeBackgroundAccess(String? token) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (token == null || token.isEmpty) {
+      await prefs.remove(_backgroundTokenKey);
+      await prefs.remove(_backgroundApiBaseUrlKey);
+      return;
+    }
+
+    await prefs.setString(_backgroundTokenKey, token);
+
+    final apiBaseUrl =
+        await _storage.read(key: _apiBaseKey) ?? _buildOverrideApiBaseUrl();
+    if (apiBaseUrl == null || apiBaseUrl.trim().isEmpty) {
+      await prefs.remove(_backgroundApiBaseUrlKey);
+      return;
+    }
+
+    await prefs.setString(
+      _backgroundApiBaseUrlKey,
+      _normalizeApiBaseUrl(apiBaseUrl),
+    );
+  }
+
+  Future<void> _clearBackgroundAccess() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_backgroundTokenKey);
+    await prefs.remove(_backgroundApiBaseUrlKey);
+  }
+
+  bool _isDuplicateNotification(String key) {
+    final now = DateTime.now();
+    _recentNotificationKeys.removeWhere(
+      (_, timestamp) =>
+          now.difference(timestamp) > _duplicateNotificationWindow,
+    );
+
+    final lastTimestamp = _recentNotificationKeys[key];
+    if (lastTimestamp != null &&
+        now.difference(lastTimestamp) <= _duplicateNotificationWindow) {
+      return true;
+    }
+
+    _recentNotificationKeys[key] = now;
+    return false;
+  }
+
+  String _buildNotificationKey({
+    required int? alertId,
+    required String title,
+    required String body,
+    required bool urgent,
+  }) {
+    if (alertId != null) {
+      return 'alert:$alertId';
+    }
+    return '${urgent ? 'urgent' : 'normal'}|$title|$body';
+  }
+
+  OutOfQuotaPolicy? _expeditedPolicyForDelay(Duration initialDelay) {
+    // Android rejects expedited work requests when any initial delay is applied.
+    if (initialDelay > Duration.zero) {
+      return null;
+    }
+    return OutOfQuotaPolicy.run_as_non_expedited_work_request;
   }
 
   static String _normalizeApiBaseUrl(String rawValue) {

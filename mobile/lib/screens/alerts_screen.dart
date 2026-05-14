@@ -7,7 +7,12 @@ import '../services/api_service.dart';
 import '../services/auth_service.dart';
 
 class AlertsScreen extends StatefulWidget {
-  const AlertsScreen({super.key});
+  const AlertsScreen({
+    super.key,
+    required this.refreshToken,
+  });
+
+  final int refreshToken;
 
   @override
   State<AlertsScreen> createState() => _AlertsScreenState();
@@ -20,6 +25,14 @@ class _AlertsScreenState extends State<AlertsScreen> {
   void initState() {
     super.initState();
     _alertsFuture = _fetchAlerts();
+  }
+
+  @override
+  void didUpdateWidget(covariant AlertsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.refreshToken != oldWidget.refreshToken) {
+      _reload();
+    }
   }
 
   Future<List<Alert>> _fetchAlerts() async {
@@ -71,7 +84,10 @@ class _AlertsScreenState extends State<AlertsScreen> {
       child: FutureBuilder<List<Alert>>(
         future: _alertsFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          final alerts = snapshot.data ?? const <Alert>[];
+
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              alerts.isEmpty) {
             return const Center(child: CircularProgressIndicator());
           }
 
@@ -94,7 +110,6 @@ class _AlertsScreenState extends State<AlertsScreen> {
             );
           }
 
-          final alerts = snapshot.data ?? const [];
           if (alerts.isEmpty) {
             return ListView(
               physics: const AlwaysScrollableScrollPhysics(),

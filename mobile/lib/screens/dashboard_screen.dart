@@ -25,14 +25,28 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen>
+    with WidgetsBindingObserver {
+  static const _fallbackRefreshInterval = Duration(seconds: 20);
+  static const _defaultRefreshDebounce = Duration(milliseconds: 900);
+  static const _heartbeatRefreshDebounce = Duration(seconds: 3);
+
   int _selectedIndex = 0;
   WebSocketChannel? _wsChannel;
   StreamSubscription? _wsSubscription;
+  Timer? _fallbackRefreshTimer;
+  Timer? _wsReconnectTimer;
+  Timer? _scheduledRefreshTimer;
+  AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
 
   bool _isLoading = true;
   bool _simulationRunning = false;
   bool _simulationBusy = false;
+  bool _isLiveRefreshInFlight = false;
+  bool _hasPendingLiveRefresh = false;
+  bool _isWebSocketConnected = false;
+  int _tabRefreshToken = 0;
+  int _webSocketReconnectAttempts = 0;
 
   int _totalBuildings = 0;
   int _totalRooms = 0;
@@ -53,39 +67,93 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    NotificationService.instance.setAppLifecycleState(_appLifecycleState);
     _connectWebSocket();
-    unawaited(_loadDashboardData());
+    _startFallbackRefreshTimer();
+    unawaited(_reloadLiveData(showLoading: true, broadcastToTabs: false));
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _fallbackRefreshTimer?.cancel();
+    _wsReconnectTimer?.cancel();
+    _scheduledRefreshTimer?.cancel();
     _wsSubscription?.cancel();
     _wsChannel?.sink.close();
     NotificationService.instance.stopUrgentSiren();
     super.dispose();
   }
 
-  void _connectWebSocket() {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final wasForeground = _isForegroundState(_appLifecycleState);
+    final isForeground = _isForegroundState(state);
+
+    _appLifecycleState = state;
+    NotificationService.instance.setAppLifecycleState(state);
+
+    if (!wasForeground && isForeground) {
+      _connectWebSocket(forceReconnect: true);
+      _startFallbackRefreshTimer();
+      _scheduleLiveRefresh(delay: Duration.zero);
+      return;
+    }
+
+    if (wasForeground && !isForeground) {
+      _fallbackRefreshTimer?.cancel();
+      unawaited(
+        NotificationService.instance.scheduleImmediateBackgroundSync(),
+      );
+    }
+  }
+
+  void _connectWebSocket({bool forceReconnect = false}) {
+    if (!mounted) {
+      return;
+    }
+
+    if (!forceReconnect && _isWebSocketConnected) {
+      return;
+    }
+
+    _wsReconnectTimer?.cancel();
+    _wsSubscription?.cancel();
+    _wsChannel?.sink.close();
+
     final apiService = context.read<ApiService>();
-    _wsChannel = apiService.connectWebSocket();
-    _wsSubscription = _wsChannel?.stream.listen(
-      (message) {
-        try {
-          final payload = message is String
-              ? jsonDecode(message) as Map<String, dynamic>
-              : (message as Map).cast<String, dynamic>();
-          _handleRealtimePayload(payload);
-        } catch (error) {
-          debugPrint('WebSocket parse error: $error');
-        }
-      },
-      onError: (error) {
-        debugPrint('WebSocket error: $error');
-      },
-      onDone: () {
-        debugPrint('WebSocket closed');
-      },
-    );
+    try {
+      _wsChannel = apiService.connectWebSocket();
+      _wsSubscription = _wsChannel?.stream.listen(
+        (message) {
+          try {
+            final payload = message is String
+                ? jsonDecode(message) as Map<String, dynamic>
+                : (message as Map).cast<String, dynamic>();
+            _webSocketReconnectAttempts = 0;
+            _isWebSocketConnected = true;
+            _handleRealtimePayload(payload);
+          } catch (error) {
+            debugPrint('WebSocket parse error: $error');
+          }
+        },
+        onError: (error) {
+          debugPrint('WebSocket error: $error');
+          _handleWebSocketDisconnect();
+        },
+        onDone: () {
+          debugPrint('WebSocket closed');
+          _handleWebSocketDisconnect();
+        },
+        cancelOnError: true,
+      );
+      _isWebSocketConnected = true;
+      _webSocketReconnectAttempts = 0;
+    } catch (error) {
+      debugPrint('WebSocket connect error: $error');
+      _handleWebSocketDisconnect();
+    }
   }
 
   void _handleRealtimePayload(Map<String, dynamic> payload) {
@@ -114,6 +182,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     });
 
+    if (_shouldRefreshForPayload(payload)) {
+      _scheduleLiveRefresh(
+        delay: _refreshDelayForPayload(payload),
+      );
+    }
+
     if (type == 'alert.created' || type == 'notification') {
       final title = type == 'notification'
           ? (payload['title']?.toString() ?? 'Control room notification')
@@ -122,30 +196,124 @@ class _DashboardScreenState extends State<DashboardScreen> {
           payload['body']?.toString() ??
           'Realtime event received';
 
-      NotificationService.instance.showRealtimeAlert(
-        title: title,
-        body: body,
-        severity: severity,
-        playSiren: urgent,
+      unawaited(
+        NotificationService.instance.showRealtimeAlert(
+          title: title,
+          body: body,
+          severity: severity,
+          playSiren: urgent,
+          alertId: int.tryParse(payload['id']?.toString() ?? ''),
+        ),
       );
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: urgent ? Colors.red.shade700 : null,
-          content: Text(body),
+      if (_isForegroundState(_appLifecycleState)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: urgent ? Colors.red.shade700 : null,
+            content: Text(body),
+          ),
+        );
+      }
+    }
+  }
+
+  void _handleWebSocketDisconnect() {
+    _isWebSocketConnected = false;
+
+    if (!mounted || _wsReconnectTimer?.isActive == true) {
+      return;
+    }
+
+    _webSocketReconnectAttempts += 1;
+    final retryDelaySeconds = min(30, 2 * _webSocketReconnectAttempts);
+    _wsReconnectTimer = Timer(
+      Duration(seconds: retryDelaySeconds),
+      () => _connectWebSocket(forceReconnect: true),
+    );
+
+    if (!_isForegroundState(_appLifecycleState)) {
+      unawaited(
+        NotificationService.instance.scheduleImmediateBackgroundSync(
+          initialDelay: const Duration(seconds: 5),
         ),
       );
     }
   }
 
-  Future<void> _loadDashboardData() async {
+  void _startFallbackRefreshTimer() {
+    _fallbackRefreshTimer?.cancel();
+    if (!_isForegroundState(_appLifecycleState)) {
+      return;
+    }
+
+    _fallbackRefreshTimer = Timer.periodic(
+      _fallbackRefreshInterval,
+      (_) => _scheduleLiveRefresh(delay: Duration.zero),
+    );
+  }
+
+  void _scheduleLiveRefresh({
+    Duration delay = _defaultRefreshDebounce,
+  }) {
+    if (!mounted) {
+      return;
+    }
+
+    if (delay == Duration.zero) {
+      unawaited(_reloadLiveData());
+      return;
+    }
+
+    _scheduledRefreshTimer?.cancel();
+    _scheduledRefreshTimer = Timer(delay, () {
+      unawaited(_reloadLiveData());
+    });
+  }
+
+  Future<void> _reloadLiveData({
+    bool showLoading = false,
+    bool broadcastToTabs = true,
+  }) async {
+    if (_isLiveRefreshInFlight) {
+      _hasPendingLiveRefresh = true;
+      return;
+    }
+
+    _isLiveRefreshInFlight = true;
+    try {
+      await _loadDashboardData(
+        showLoading: showLoading,
+        broadcastToTabs: broadcastToTabs,
+      );
+    } finally {
+      _isLiveRefreshInFlight = false;
+      if (_hasPendingLiveRefresh && mounted) {
+        _hasPendingLiveRefresh = false;
+        unawaited(_reloadLiveData());
+      }
+    }
+  }
+
+  Future<void> _loadDashboardData({
+    bool showLoading = false,
+    bool broadcastToTabs = false,
+  }) async {
+    if (showLoading && mounted) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
+
     try {
       final apiService = context.read<ApiService>();
-      final summaryPayload = apiService.expectMap(
-        await apiService.get('/analytics/summary'),
-      );
-      final roomPayload = apiService.expectList(await apiService.get('/rooms'));
-      final alertPayload = apiService.expectList(await apiService.get('/alerts'));
+      final responses = await Future.wait<dynamic>([
+        apiService.get('/analytics/summary'),
+        apiService.get('/rooms'),
+        apiService.get('/alerts'),
+      ]);
+      final summaryPayload = apiService.expectMap(responses[0]);
+      final roomPayload = apiService.expectList(responses[1]);
+      final alertPayload = apiService.expectList(responses[2]);
 
       if (!mounted) {
         return;
@@ -162,7 +330,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _recentAlerts = alertPayload.take(5).map(Alert.fromJson).toList();
         _selectedRoomCode ??=
             _rooms.isNotEmpty ? _rooms.first.roomCode : 'CHR_01';
+        if (broadcastToTabs) {
+          _tabRefreshToken += 1;
+        }
         _isLoading = false;
+        _statusMessage = null;
       });
     } catch (error) {
       if (!mounted) {
@@ -204,7 +376,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             response['message']?.toString() ?? 'Simulation request completed.';
       });
 
-      await _loadDashboardData();
+      await _reloadLiveData();
     } catch (error) {
       if (!mounted) {
         return;
@@ -266,10 +438,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         index: _selectedIndex,
         children: [
           _buildOverviewTab(currentUser),
-          const RoomsScreen(),
-          const AlertsScreen(),
-          const DevicesScreen(),
-          const AnalyticsScreen(),
+          RoomsScreen(refreshToken: _tabRefreshToken),
+          AlertsScreen(refreshToken: _tabRefreshToken),
+          DevicesScreen(refreshToken: _tabRefreshToken),
+          AnalyticsScreen(refreshToken: _tabRefreshToken),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
@@ -307,7 +479,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     return RefreshIndicator(
-      onRefresh: _loadDashboardData,
+      onRefresh: _reloadLiveData,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(16),
@@ -412,7 +584,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final body = _urgentEvent?['message']?.toString() ??
         _urgentEvent?['body']?.toString() ??
         'Urgent alert received.';
-    final severity = (_urgentEvent?['severity'] ?? 'high').toString().toUpperCase();
+    final severity =
+        (_urgentEvent?['severity'] ?? 'high').toString().toUpperCase();
     final roomCode = _urgentEvent?['room_code']?.toString();
 
     return Card(
@@ -711,5 +884,46 @@ class _DashboardScreenState extends State<DashboardScreen> {
       default:
         return 'medium';
     }
+  }
+
+  bool _shouldRefreshForPayload(Map<String, dynamic> payload) {
+    final type = payload['type']?.toString().toLowerCase() ?? 'event';
+    final eventType = payload['event_type']?.toString().toLowerCase() ?? '';
+
+    if (type == 'telemetry' ||
+        type == 'ai_event' ||
+        type == 'alert.created' ||
+        type == 'alert.acknowledged' ||
+        type == 'notification') {
+      return true;
+    }
+
+    return switch (eventType) {
+      'heartbeat' ||
+      'door_open' ||
+      'door_prolonged_open' ||
+      'blockage' ||
+      'overflow' ||
+      'leak' ||
+      'motion' ||
+      'misuse' ||
+      'garbage_left' ||
+      'garbage_on_floor' ||
+      'ai_misuse' =>
+        true,
+      _ => false,
+    };
+  }
+
+  Duration _refreshDelayForPayload(Map<String, dynamic> payload) {
+    final eventType = payload['event_type']?.toString().toLowerCase();
+    if (eventType == 'heartbeat') {
+      return _heartbeatRefreshDebounce;
+    }
+    return _defaultRefreshDebounce;
+  }
+
+  bool _isForegroundState(AppLifecycleState state) {
+    return state == AppLifecycleState.resumed;
   }
 }

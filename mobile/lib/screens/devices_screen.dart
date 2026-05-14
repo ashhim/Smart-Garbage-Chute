@@ -6,7 +6,12 @@ import '../models/device.dart';
 import '../services/api_service.dart';
 
 class DevicesScreen extends StatefulWidget {
-  const DevicesScreen({super.key});
+  const DevicesScreen({
+    super.key,
+    required this.refreshToken,
+  });
+
+  final int refreshToken;
 
   @override
   State<DevicesScreen> createState() => _DevicesScreenState();
@@ -19,6 +24,14 @@ class _DevicesScreenState extends State<DevicesScreen> {
   void initState() {
     super.initState();
     _devicesFuture = _fetchDevices();
+  }
+
+  @override
+  void didUpdateWidget(covariant DevicesScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.refreshToken != oldWidget.refreshToken) {
+      _reload();
+    }
   }
 
   Future<List<Device>> _fetchDevices() async {
@@ -41,7 +54,10 @@ class _DevicesScreenState extends State<DevicesScreen> {
       child: FutureBuilder<List<Device>>(
         future: _devicesFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          final devices = snapshot.data ?? const <Device>[];
+
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              devices.isEmpty) {
             return const Center(child: CircularProgressIndicator());
           }
 
@@ -64,7 +80,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
             );
           }
 
-          final devices = snapshot.data ?? const [];
           if (devices.isEmpty) {
             return ListView(
               physics: const AlwaysScrollableScrollPhysics(),
